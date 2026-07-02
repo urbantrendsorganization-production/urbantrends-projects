@@ -1,0 +1,26 @@
+name: onboardkit_agent
+description: OnboardKit field-agent app — client onboarding & KYC capture.
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+  flutter: ">=3.22.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # State management (CLAUDE.md §12).
+  flutter_riverpod: ^2.5.1
+  # HTTP client; the generated OpenAPI dart-dio client plugs in here in Phase 2.
+  dio: ^5.7.0
+  # Secure token storage.
+  flutter_secure_storage: ^9.2.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

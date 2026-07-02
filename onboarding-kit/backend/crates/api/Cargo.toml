@@ -1,0 +1,37 @@
+[package]
+name = "onboardkit-api"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# api -> {core, db, jobs, integrations} (CLAUDE.md §2).
+
+[lib]
+name = "onboardkit_api"
+path = "src/lib.rs"
+
+[[bin]]
+name = "api"
+path = "src/main.rs"
+
+[dependencies]
+onboardkit-core.workspace = true
+onboardkit-db.workspace = true
+
+axum.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+
+sqlx.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+jsonwebtoken.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+dotenvy.workspace = true
+anyhow.workspace = true

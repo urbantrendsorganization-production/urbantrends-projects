@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Phase 0 has no compile-checked queries; build fully offline.
+  SQLX_OFFLINE: "true"
+
+jobs:
+  backend:
+    name: backend (fmt · clippy · test · sqlx offline)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (-D warnings)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test --all
+
+      - name: SQLx offline cache check
+        # SQLX_OFFLINE=true (set globally) forces the build to use the committed
+        # query cache with no database. Once compile-checked `query!` macros exist
+        # (Phase 1+), the committed `.sqlx/` cache is verified up-to-date.
+        run: |
+          if [ -d .sqlx ]; then
+            cargo install sqlx-cli --version '^0.8' --no-default-features --features rustls,postgres --locked
+            cargo sqlx prepare --workspace --check
+          else
+            echo "No .sqlx cache yet (no compile-checked queries). Verifying offline build."
+            cargo build --all-targets --all-features
+          fi
+
+  docker:
+    name: docker image (cargo-chef cached build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image (api + worker)
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile
+          push: false
+          tags: onboardkit-backend:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  office:
+    name: office (Next.js typecheck + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/office
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/office/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
