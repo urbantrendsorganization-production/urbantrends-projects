@@ -1,0 +1,28 @@
+[package]
+name = "onboardkit-jobs"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# jobs -> {core, db, integrations} (CLAUDE.md §2).
+
+[lib]
+name = "onboardkit_jobs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "worker"
+path = "src/main.rs"
+
+[dependencies]
+onboardkit-core.workspace = true
+onboardkit-db.workspace = true
+onboardkit-integrations.workspace = true
+
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+dotenvy.workspace = true

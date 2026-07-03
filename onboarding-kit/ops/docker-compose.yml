@@ -1,0 +1,94 @@
+# OnboardKit dev stack (CLAUDE.md §14).
+#   docker compose -f ops/docker-compose.yml up --build
+# Variables resolve from ops/.env (copy from ops/.env.example). Defaults below
+# let the stack come up with zero configuration.
+
+name: onboardkit
+
+x-backend-env: &backend-env
+  APP_ENV: development
+  RUST_LOG: ${RUST_LOG:-info,sqlx=warn,tower_http=info}
+  DATABASE_URL: postgres://${POSTGRES_USER:-onboardkit}:${POSTGRES_PASSWORD:-onboardkit}@postgres:5432/${POSTGRES_DB:-onboardkit}
+  DB_MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-10}
+  JWT_SECRET: ${JWT_SECRET:-dev-insecure-secret-change-me-at-least-32-chars}
+  JWT_ACCESS_TTL_SECS: ${JWT_ACCESS_TTL_SECS:-900}
+  JWT_REFRESH_TTL_SECS: ${JWT_REFRESH_TTL_SECS:-1209600}
+  S3_ENDPOINT: http://minio:9000
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_BUCKET: ${S3_BUCKET:-onboardkit}
+  S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-onboardkit}
+  S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-onboardkit-secret}
+  S3_FORCE_PATH_STYLE: "true"
+  WORKER_POLL_INTERVAL_SECS: ${WORKER_POLL_INTERVAL_SECS:-5}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-onboardkit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-onboardkit}
+      POSTGRES_DB: ${POSTGRES_DB:-onboardkit}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-onboardkit} -d ${POSTGRES_DB:-onboardkit}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-onboardkit}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-onboardkit-secret}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    image: onboardkit-backend:dev
+    command: ["api"]
+    environment:
+      <<: *backend-env
+      API_HOST: 0.0.0.0
+      API_PORT: 8080
+    ports:
+      - "${API_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  jobs:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    image: onboardkit-backend:dev
+    command: ["worker"]
+    environment:
+      <<: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  minio-data:

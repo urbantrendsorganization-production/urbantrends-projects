@@ -1,0 +1,20 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec.lock
+
+# Generated platform folders (recreate with `flutter create .`)
+# Android/iOS build outputs
+**/android/.gradle/
+**/android/local.properties
+**/ios/Pods/
+
+# IDE
+.idea/
+.vscode/
+*.iml

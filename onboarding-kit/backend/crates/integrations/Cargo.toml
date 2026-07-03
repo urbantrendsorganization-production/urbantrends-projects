@@ -1,0 +1,13 @@
+[package]
+name = "onboardkit-integrations"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# integrations -> core only (CLAUDE.md §2).
+
+[dependencies]
+onboardkit-core.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

@@ -1,0 +1,27 @@
+# Rust
+/backend/target
+target/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+.turbo/
+next-env.d.ts
+
+# Flutter / Dart
+.dart_tool/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Env / secrets
+.env
+.env.local
+!*.env.example
+
+# OS / editor
+.DS_Store
+*.log
+.idea/
+.vscode/
