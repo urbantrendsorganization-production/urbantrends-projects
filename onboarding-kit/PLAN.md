@@ -4,8 +4,28 @@ Working checklist for Claude Code sessions. Read CLAUDE.md first — it is the s
 
 Phases are a dependency sequence, not a schedule. Move to the next phase the moment the "Done when" gate passes — no waiting, no padding. Ship as fast as the gates allow.
 
-**Current phase:** Phase 2 (Phase 1 complete)
-**Last session note:** 2026-07-03 — Phase 1 landed on branch `phase/1-schema-auth`.
+**Current phase:** Phase 2/3 backend complete + core loop proven; Phase 4 (admin/reports/export), frontends, and hardening/deploy remain.
+**Last session note:** 2026-07-05 — Stabilised the tree to green (fixed a
+boot-blocking S3 sleep_impl panic, 3 clippy errors, stale tests; regenerated
+`.sqlx`) and committed Phase 1 + the Phase 2 substrate. Wired the **Phase 2
+backend** (clients/applications CRUD, PATCH progressive save, presign/confirm
+with magic-byte MIME + tenant-scoped keys, OTP send/verify, consent, submit
+completeness gate) and the **worker** (real dispatch loop, `process_image`
+recompress≤300KB+EXIF-strip+thumbnail, `send_sms` via MockProvider). Wired the
+**Phase 3 backend** review endpoint (start_review/approve/reject/return via the
+core state machine, reviewer branch-scoped), atomic `record_transition` with
+tenant-scoped `client_number` assignment, and notification SMS through the jobs
+table. **72 backend tests green** (auth + 7 application/review/RBAC integration
+tests), clippy `-D warnings`, fmt, `sqlx prepare --check`, offline build all
+clean. **Proved the whole loop live** against postgres+minio+worker: onboard →
+upload → image processing → OTP → consent → submit → approve → `JM-00001`.
+Commits: `b33fa1a` (P1 baseline), `be1aeb4` (P2 backend), `5bb89f2` (P3 review),
+ops compose tweak. NOT done: OpenAPI/utoipa, real SMS providers
+(AfricasTalking/Infobip/Fallback — only trait+Mock), Phase 4 (admin CRUD,
+reports, export), office UI beyond login, Flutter stepper (Flutter not installed
+here — Dart uncompiled), Phase 5 hardening (rate limiting) + prod deploy push.
+--- prior note ---
+2026-07-03 — Phase 1 landed on branch `phase/1-schema-auth`.
 All 10 tables migrated (sqlx, versions 0001–0003); `application_events` is
 append-only via triggers on UPDATE/DELETE/TRUNCATE (verified live). `core` state
 machine (`Status`/`StatusKind`/`apply_transition`) with 20 exhaustive tests
@@ -70,15 +90,15 @@ stepper.
 ## Phase 2 — Agent onboarding flow · branch `phase/2-agent-flow`
 
 Backend:
-- [ ] `POST /clients`, `POST /applications` (draft creation)
-- [ ] `PATCH /applications/:id` progressive per-section save (Draft/Returned only)
-- [ ] Presign upload endpoint (PUT, 10 min expiry, size/content-type constrained)
-- [ ] Confirm endpoint: object existence + size + magic-byte MIME validation → enqueue `process_image`
-- [ ] `process_image` job: recompress ≤300KB, strip EXIF, thumbnail, mark processed — idempotent
-- [ ] Jobs worker loop (`FOR UPDATE SKIP LOCKED`, backoff, max_attempts) + tests
-- [ ] OTP send/verify endpoints (client's phone, stamps `otp_verified_at`)
-- [ ] Consent endpoint (terms_version + timestamp)
-- [ ] Submit endpoint: completeness validation (4 docs processed, OTP verified, consent recorded) → Draft→Submitted event
+- [x] `POST /clients`, `POST /applications` (draft creation)
+- [x] `PATCH /applications/:id` progressive per-section save (Draft/Returned only; E.164 phone normalization)
+- [x] Presign upload endpoint (PUT, 10 min expiry, size/content-type constrained)
+- [x] Confirm endpoint: object existence + size + magic-byte MIME validation + tenant-scoped key → enqueue `process_image`
+- [x] `process_image` job: recompress ≤300KB, strip EXIF (via re-encode), thumbnail, mark processed — idempotent
+- [x] Jobs worker loop (`FOR UPDATE SKIP LOCKED`, backoff, max_attempts) — proven live (dedicated unit tests still TODO)
+- [x] OTP send/verify endpoints (client's phone, stamps `otp_verified_at`)
+- [x] Consent endpoint (terms_version + timestamp)
+- [x] Submit endpoint: completeness validation (4 docs processed, OTP verified, consent recorded) → Draft→Submitted event
 - [ ] OpenAPI spec via utoipa served in dev; Dart + TS clients generated
 
 Flutter agent app:
@@ -94,12 +114,12 @@ Flutter agent app:
 ## Phase 3 — Review queue + notifications · branch `phase/3-review-notify`
 
 Backend:
-- [ ] `GET /applications` role-scoped queue (filters: status, branch, agent, date; pagination)
-- [ ] `GET /applications/:id` detail with short-expiry presigned GET URLs (≤5 min)
-- [ ] `POST /applications/:id/review` — start_review / approve / reject / return per state machine
-- [ ] Client number generation on approval (tenant-scoped sequence)
-- [ ] `SmsProvider` trait + AfricasTalking + Infobip + FallbackProvider + MockProvider per §9
-- [ ] `send_sms` job wired to approval/rejection/return events; provider used recorded on job row
+- [x] `GET /applications` role-scoped queue (agent=own, reviewer=branch non-draft, admin=tenant; status/branch/agent filters; pagination)
+- [x] `GET /applications/:id` detail with short-expiry presigned GET URLs (≤5 min)
+- [x] `POST /applications/:id/review` — start_review / approve / reject / return per state machine (reviewer branch-scoped)
+- [x] Client number generation on approval (tenant-scoped, tenant-row-locked; prefix from tenant initials, e.g. `JM-00001`)
+- [~] `SmsProvider` trait + MockProvider done; AfricasTalking + Infobip + FallbackProvider NOT yet implemented (§9)
+- [~] `send_sms` job wired to approval/rejection/return events; provider-used-on-job-row NOT recorded yet
 
 Office app:
 - [ ] Review queue table (filters, status badges, pagination)
