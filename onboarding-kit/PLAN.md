@@ -145,9 +145,9 @@ Office app:
 
 ## Phase 5 — Hardening + deploy · branch `phase/5-hardening-deploy`
 
-- [ ] Full CLAUDE.md §13 security checklist pass (each item verified, not assumed)
-- [ ] Rate limiting via tower-governor on `/auth/*` and `/otp/*`
-- [ ] PII log audit (grep tracing calls for phone/pin/otp/token)
+- [~] Full CLAUDE.md §13 security checklist pass (rate limiting + PII log audit done; remaining items already enforced in P1–P4 — verify-and-tick sweep still TODO)
+- [x] Rate limiting via tower-governor on `/auth/*` and `/otp/*` (IP-keyed SmartIpKeyExtractor; config-gated via `RATE_LIMIT_*`; server serves with `ConnectInfo`; 2 integration tests: same-IP throttle + per-IP isolation)
+- [x] PII log audit (grep tracing calls for phone/pin/otp/token) — clean: phones logged via `.masked()` (last-3), all else IDs only, every `#[instrument]` uses `skip`
 - [ ] Multi-stage Dockerfile (cargo-chef → debian-slim), one image, `api` + `jobs` services
 - [ ] GH Actions: build + push to GHCR on main
 - [ ] Prod compose at `/srv/urbantrends/onboardkit/`, Caddy vhost `onboardkit.urbantrends.dev`
@@ -221,6 +221,19 @@ Record any decision not covered by CLAUDE.md here (date, decision, why). Keep CL
 - 2026-07-03 — **Migrations are embedded (`sqlx::migrate!`) and run at
   api/worker/seed startup.** A fresh database self-provisions on boot; no
   separate `migrate` binary. Codifies the schema-source-of-truth in `db`.
+- 2026-07-05 — **Rate limiting is IP-keyed, config-gated, and scoped to
+  `/auth/*` + `/otp/*`.** `tower_governor` `GovernorLayer` with
+  `SmartIpKeyExtractor` (reads `X-Forwarded-For`/`X-Real-Ip` behind Caddy, else
+  the `ConnectInfo` peer) is layered on just the auth+otp subrouter — the two
+  brute-force/flood surfaces; everything else is already behind auth+RBAC.
+  Limits come from `RATE_LIMIT_{ENABLED,PER_MINUTE,BURST}` (default 30/min,
+  burst 15). The main server now serves via
+  `into_make_service_with_connect_info::<SocketAddr>()` so the extractor has a
+  peer address. Integration tests drive `oneshot` without `ConnectInfo`, so the
+  three existing harnesses build with `RateLimit::disabled()`; a dedicated
+  `rate_limit.rs` enables it (burst 1) and asserts same-IP 429 + per-IP
+  isolation using an `X-Real-Ip` header. The OTP service's own counters (3
+  sends/hr, 5 attempts — §8) remain; this is HTTP-layer defense-in-depth.
 - 2026-07-05 — **Nightly export digest archives per-tenant CSV to object
   storage; EAT handled by a fixed +3h shift.** §10 names the job but not its
   output; the faithful, demoable interpretation is "archive the approved-clients

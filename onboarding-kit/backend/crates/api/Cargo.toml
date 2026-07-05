@@ -24,6 +24,7 @@ axum.workspace = true
 tokio.workspace = true
 tower.workspace = true
 tower-http.workspace = true
+tower_governor.workspace = true
 
 sqlx.workspace = true
 serde.workspace = true

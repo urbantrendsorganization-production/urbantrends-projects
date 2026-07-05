@@ -11,7 +11,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use onboardkit_api::auth::{RequireAgent, RequireReviewer, issue_access_token};
 use onboardkit_api::build_router;
-use onboardkit_api::config::{JwtConfig, Settings};
+use onboardkit_api::config::{JwtConfig, RateLimit, Settings};
 use onboardkit_api::state::{AppState, JwtState};
 use onboardkit_integrations::{ObjectStore, StorageConfig};
 use serde_json::{Value, json};
@@ -44,6 +44,7 @@ fn test_settings() -> Settings {
     Settings {
         dev_expose_otp: true,
         terms_version: "v1".to_owned(),
+        rate_limit: RateLimit::disabled(),
     }
 }
 

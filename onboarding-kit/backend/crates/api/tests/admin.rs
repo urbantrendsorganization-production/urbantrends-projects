@@ -6,7 +6,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use onboardkit_api::build_router;
-use onboardkit_api::config::{JwtConfig, Settings};
+use onboardkit_api::config::{JwtConfig, RateLimit, Settings};
 use onboardkit_api::state::{AppState, JwtState};
 use onboardkit_integrations::{ObjectStore, StorageConfig};
 use serde_json::{Value, json};
@@ -33,6 +33,7 @@ fn app(pool: PgPool) -> Router {
     let settings = Settings {
         dev_expose_otp: true,
         terms_version: "v1".to_owned(),
+        rate_limit: RateLimit::disabled(),
     };
     build_router(AppState::new(pool, jwt, storage, settings))
 }
