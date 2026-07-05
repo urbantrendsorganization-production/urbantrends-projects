@@ -25,6 +25,16 @@ pub struct JwtConfig {
     pub refresh_ttl: Duration,
 }
 
+/// Runtime settings for the onboarding flow.
+#[derive(Debug, Clone)]
+pub struct Settings {
+    /// Dev-only: return OTP codes in API responses so the flow is testable
+    /// without live SMS. MUST default off (§8).
+    pub dev_expose_otp: bool,
+    /// The consent terms version clients must accept.
+    pub terms_version: String,
+}
+
 /// Fully-resolved application configuration.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -33,6 +43,8 @@ pub struct Config {
     pub database_url: String,
     pub db_max_connections: u32,
     pub jwt: JwtConfig,
+    pub storage: onboardkit_integrations::StorageConfig,
+    pub settings: Settings,
 }
 
 impl Config {
@@ -63,6 +75,21 @@ impl Config {
         let access_ttl = Duration::from_secs(parse_env("JWT_ACCESS_TTL_SECS", 900u64)?);
         let refresh_ttl = Duration::from_secs(parse_env("JWT_REFRESH_TTL_SECS", 1_209_600u64)?);
 
+        let storage = onboardkit_integrations::StorageConfig {
+            endpoint: require_env("S3_ENDPOINT")?,
+            region: std::env::var("S3_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
+            bucket: require_env("S3_BUCKET")?,
+            access_key_id: require_env("S3_ACCESS_KEY_ID")?,
+            secret_access_key: require_env("S3_SECRET_ACCESS_KEY")?,
+            force_path_style: parse_env("S3_FORCE_PATH_STYLE", true)?,
+        };
+
+        let settings = Settings {
+            dev_expose_otp: parse_env("DEV_EXPOSE_OTP", false)?,
+            terms_version: std::env::var("CONSENT_TERMS_VERSION")
+                .unwrap_or_else(|_| "v1".to_string()),
+        };
+
         Ok(Self {
             app_env,
             bind_addr,
@@ -73,6 +100,8 @@ impl Config {
                 access_ttl,
                 refresh_ttl,
             },
+            storage,
+            settings,
         })
     }
 }

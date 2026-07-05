@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kyc_documents SET processed = TRUE, thumbnail_key = $2 WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ad782279785a0f2505b99f1f9911f1abb5a14a2a0ddbd00845ecacaac9e15c2d"
+}

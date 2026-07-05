@@ -11,13 +11,28 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # Phase 0 has no compile-checked queries; build fully offline.
+  # Compile `query!` macros against the committed offline cache — no DB needed at
+  # build time. Runtime integration tests (`#[sqlx::test]`) still use DATABASE_URL.
   SQLX_OFFLINE: "true"
 
 jobs:
   backend:
     name: backend (fmt · clippy · test · sqlx offline)
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: onboardkit
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/onboardkit
     defaults:
       run:
         working-directory: backend
@@ -34,6 +49,14 @@ jobs:
         with:
           workspaces: backend
 
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --version '^0.8' --no-default-features --features rustls,postgres --locked
+
+      - name: Run migrations
+        # Applies the schema so `sqlx prepare --check` can re-derive query metadata.
+        # `#[sqlx::test]` creates its own isolated databases from this connection.
+        run: cargo sqlx migrate run --source migrations
+
       - name: Format check
         run: cargo fmt --all -- --check
 
@@ -44,17 +67,8 @@ jobs:
         run: cargo test --all
 
       - name: SQLx offline cache check
-        # SQLX_OFFLINE=true (set globally) forces the build to use the committed
-        # query cache with no database. Once compile-checked `query!` macros exist
-        # (Phase 1+), the committed `.sqlx/` cache is verified up-to-date.
-        run: |
-          if [ -d .sqlx ]; then
-            cargo install sqlx-cli --version '^0.8' --no-default-features --features rustls,postgres --locked
-            cargo sqlx prepare --workspace --check
-          else
-            echo "No .sqlx cache yet (no compile-checked queries). Verifying offline build."
-            cargo build --all-targets --all-features
-          fi
+        # Verifies the committed `.sqlx/` cache is up-to-date with the queries.
+        run: cargo sqlx prepare --workspace --check
 
   docker:
     name: docker image (cargo-chef cached build)

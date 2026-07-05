@@ -31,7 +31,21 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
 
-    let state = AppState::new(pool, JwtState::new(config.jwt.clone()));
+    // Self-provision the schema on boot so a fresh database is ready to serve.
+    onboardkit_db::run_migrations(&pool).await?;
+    tracing::info!("migrations applied");
+
+    let storage = onboardkit_integrations::ObjectStore::new(&config.storage);
+    if let Err(error) = storage.ensure_bucket().await {
+        tracing::warn!(%error, "could not ensure object storage bucket (continuing)");
+    }
+
+    let state = AppState::new(
+        pool,
+        JwtState::new(config.jwt.clone()),
+        storage,
+        config.settings.clone(),
+    );
     let app = build_router(state);
 
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;

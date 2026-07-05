@@ -4,19 +4,30 @@ Working checklist for Claude Code sessions. Read CLAUDE.md first — it is the s
 
 Phases are a dependency sequence, not a schedule. Move to the next phase the moment the "Done when" gate passes — no waiting, no padding. Ship as fast as the gates allow.
 
-**Current phase:** Phase 1 (Phase 0 complete)
-**Last session note:** 2026-07-02 — Phase 0 landed on branch `phase/0-foundation`.
-Rust workspace (api/core/db/jobs/integrations) builds clean; `cargo fmt`, `clippy
---all-targets -D warnings`, and `cargo test --all` all green (5 backend tests:
-core Role roundtrip + JWT decode/expiry/wrong-key). Axum `/api/v1/health` (DB
-ping → 200/503), `AppError`→JSON per §7, JWT claims extractor skeleton, tracing
-(pretty dev / JSON prod), env config via dotenvy. docker-compose stack verified:
-`docker compose up` → api **healthy** (`{"status":"ok","database":"up"}`), worker
-running, postgres+minio healthy; office proxy `/api/health` reaches the live API.
-CI workflow added (fmt, clippy, test, sqlx-offline, cargo-chef docker build,
-office lint+build). office (Next 16 + shadcn) lint+build green. agent (Flutter)
-Dart sources committed — platform folders regenerated via `flutter create` (CLI
-absent in build env; documented). Next: Phase 1 schema + auth + state machine.
+**Current phase:** Phase 2 (Phase 1 complete)
+**Last session note:** 2026-07-03 — Phase 1 landed on branch `phase/1-schema-auth`.
+All 10 tables migrated (sqlx, versions 0001–0003); `application_events` is
+append-only via triggers on UPDATE/DELETE/TRUNCATE (verified live). `core` state
+machine (`Status`/`StatusKind`/`apply_transition`) with 20 exhaustive tests
+(every valid transition, all 24 invalid pairs, actor auth, mandatory
+reason/notes). OTP service in `integrations` (getrandom CSPRNG + rejection
+sampling, sha256, subtle constant-time, `phonenumber` E.164/KE, 5-min TTL,
+single-use, 5-attempt lockout, 3-sends/hr) generic over `Clock`+`OtpStore`, 14
+mock-clock tests; Postgres store deferred to Phase 2. Auth: argon2id
+(`integrations::password`), login/refresh/logout with rotating sha256-hashed
+refresh tokens + reuse detection, RBAC guards (`RequireAgent/Reviewer/Admin`),
+`/me`, admin stub. `db` repos (users/refresh_tokens/tenants) via compile-checked
+`query!`; `.sqlx` offline cache committed (10 queries). 53 backend tests green;
+`cargo fmt`/`clippy --all-targets -D warnings`/`cargo test --all` clean; offline
+build + `sqlx prepare --check` pass. Idempotent seed (`-p onboardkit-db --bin
+seed`): Jubilant tenant, 3 branches, 6 users (1 admin/2 reviewers/3 agents),
+shared demo password. Live end-to-end verified: admin login→200, `/me`, refresh
+rotation (reuse→401), wrong-pw→401, agent→admin/overview→403. office login via
+httpOnly-cookie proxy (login/refresh/logout/me route handlers + login page);
+lint+build green. agent (Flutter) login via dio + `flutter_secure_storage`
+(Riverpod `AuthController`); Dart committed, platform folders via `flutter
+create` (CLI absent). Next: Phase 2 draft/upload/OTP/consent/submit + Flutter
+stepper.
 
 ---
 
@@ -40,17 +51,17 @@ absent in build env; documented). Next: Phase 1 schema + auth + state machine.
 
 ## Phase 1 — Schema, auth, state machine · branch `phase/1-schema-auth`
 
-- [ ] All migrations written per CLAUDE.md §5 (tenants, branches, users, refresh_tokens, clients, onboarding_applications, application_events, kyc_documents, otp_verifications, jobs)
-- [ ] DB trigger blocking UPDATE/DELETE on `application_events`
-- [ ] `core`: `Status` enum + transition methods returning `Result<ApplicationEvent, TransitionError>` per §6
-- [ ] `core`: exhaustive state machine tests — every valid transition, every invalid pair, actor authorization, reason/notes unrepresentable-when-missing
-- [ ] OTP service in `integrations` per §8 (CSPRNG, sha256, constant-time compare, E.164, TTL, attempt + send rate limits in Postgres)
-- [ ] OTP unit tests with mock clock (expiry, attempts, reuse rejection, rate limits)
-- [ ] Auth endpoints: login, refresh (rotation, hashed storage, revocation), logout
-- [ ] argon2id password hashing
-- [ ] RBAC extractor/permission layer (agent / reviewer / admin scoping per §7)
-- [ ] RBAC denial tests (cross-role access attempts fail correctly)
-- [ ] Login flows working from both frontends (office: httpOnly cookie proxy; agent: secure storage)
+- [x] All migrations written per CLAUDE.md §5 (tenants, branches, users, refresh_tokens, clients, onboarding_applications, application_events, kyc_documents, otp_verifications, jobs)
+- [x] DB trigger blocking UPDATE/DELETE on `application_events` (also blocks TRUNCATE)
+- [x] `core`: `Status` enum + transition methods returning `Result<Transition, TransitionError>` per §6
+- [x] `core`: exhaustive state machine tests — every valid transition, every invalid pair, actor authorization, reason/notes unrepresentable-when-missing
+- [x] OTP service in `integrations` per §8 (CSPRNG, sha256, constant-time compare, E.164, TTL, attempt + send rate limits via a store trait) — Postgres store impl deferred to Phase 2 with the endpoints
+- [x] OTP unit tests with mock clock (expiry, attempts, reuse rejection, rate limits)
+- [x] Auth endpoints: login, refresh (rotation, hashed storage, revocation + reuse detection), logout
+- [x] argon2id password hashing (`integrations::password`)
+- [x] RBAC extractor/permission layer (agent / reviewer / admin scoping per §7)
+- [x] RBAC denial tests (cross-role access attempts fail correctly)
+- [x] Login flows working from both frontends (office: httpOnly cookie proxy; agent: secure storage)
 
 **Done when:** `cargo test` green across core + integrations + api auth tests; a seeded user can log in from both apps.
 
@@ -163,3 +174,34 @@ Record any decision not covered by CLAUDE.md here (date, decision, why). Keep CL
   compile-checked `query!` macros, so `SQLX_OFFLINE=true` builds already succeed
   with no database; CI runs the real `cargo sqlx prepare --check` once `.sqlx/`
   exists.
+- 2026-07-03 — **Enum columns are `TEXT` + `CHECK`, not native Postgres enums.**
+  The domain enums live in `onboardkit-core`, which must never depend on sqlx
+  (§3), so it cannot derive `sqlx::Type`. TEXT + CHECK keeps `query!` mappings
+  trivial (plain `String`) while the db layer converts to/from core enums
+  explicitly (`Role::from_db`, `StatusKind::from_db`).
+- 2026-07-03 — **`tenants.export_column_mapping JSONB` added now.** §5's tenants
+  columns omit it but §7 requires a per-tenant JSONB export-column spec on the
+  tenant row. Added with default `'{}'` to reconcile the two; consumed in Phase 4.
+- 2026-07-03 — **Authentication identity queries are the one exception to §4's
+  tenant filter.** `users::find_active_by_email`/`find_by_id` and the
+  refresh-token hash lookups run before any tenant is known (login/refresh must
+  resolve the tenant *from* the user row). Email is globally unique and refresh
+  tokens are per-user secrets, so these are safe. Every other query is
+  tenant-scoped.
+- 2026-07-03 — **OTP service is storage-agnostic; Postgres store lands in Phase
+  2.** The service in `integrations` is generic over `Clock` + `OtpStore` and is
+  fully unit-tested with an in-memory store + mock clock. The real Postgres
+  `OtpStore` is written in Phase 2 where the OTP endpoints exercise it (avoids
+  dead code and keeps `integrations` free of sqlx for now).
+- 2026-07-03 — **Password hashing lives in `integrations::password`; the seed
+  hashes independently.** `db` cannot depend on `integrations` (§2), so the
+  `seed` binary hashes with argon2id directly. Both use `Argon2::default()`
+  (argon2id) and emit self-describing PHC strings, so the hashes are
+  interoperable — the api verifies seed-created users fine.
+- 2026-07-03 — **Migrations are embedded (`sqlx::migrate!`) and run at
+  api/worker/seed startup.** A fresh database self-provisions on boot; no
+  separate `migrate` binary. Codifies the schema-source-of-truth in `db`.
+- 2026-07-03 — **Refresh-token reuse is detected and rejected.** Rotation revokes
+  the presented token and issues a new one in one transaction; if the presented
+  token was already revoked, rotation returns `None` and the endpoint answers
+  401 (possible token theft). Refresh cookies/tokens are cleared client-side.

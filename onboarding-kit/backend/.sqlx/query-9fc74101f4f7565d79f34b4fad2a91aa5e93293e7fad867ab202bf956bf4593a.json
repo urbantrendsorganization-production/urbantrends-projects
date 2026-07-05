@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kyc_documents\n             (tenant_id, application_id, doc_type, storage_key, original_filename,\n              content_type, size_bytes, processed, thumbnail_key)\n           VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, NULL)\n           ON CONFLICT (application_id, doc_type) DO UPDATE SET\n             storage_key       = EXCLUDED.storage_key,\n             original_filename = EXCLUDED.original_filename,\n             content_type      = EXCLUDED.content_type,\n             size_bytes        = EXCLUDED.size_bytes,\n             processed         = FALSE,\n             thumbnail_key     = NULL,\n             uploaded_at       = now()\n           RETURNING id, tenant_id, application_id, doc_type, storage_key,\n                     original_filename, content_type, size_bytes, processed,\n                     thumbnail_key, uploaded_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "application_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "doc_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "storage_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "original_filename",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "content_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "size_bytes",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "processed",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "thumbnail_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "uploaded_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "9fc74101f4f7565d79f34b4fad2a91aa5e93293e7fad867ab202bf956bf4593a"
+}

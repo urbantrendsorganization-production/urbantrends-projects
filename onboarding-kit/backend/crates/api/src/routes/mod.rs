@@ -1,4 +1,7 @@
-//! HTTP route modules. Phase 0 exposes only the health check; auth, application
-//! and admin routes are added in later phases.
+//! HTTP route modules. Application and reviewer routes are added in later
+//! phases; Phase 1 adds auth, the `/me` session endpoint, and an admin stub.
 
+pub mod admin;
+pub mod auth;
 pub mod health;
+pub mod session;

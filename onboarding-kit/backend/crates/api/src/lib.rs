@@ -10,6 +10,7 @@
 pub mod auth;
 pub mod config;
 pub mod error;
+pub mod otp_store;
 pub mod routes;
 pub mod state;
 pub mod telemetry;
@@ -23,7 +24,11 @@ pub use state::AppState;
 
 /// Build the full application router with all middleware and state attached.
 pub fn build_router(state: AppState) -> Router {
-    let api_v1 = Router::new().merge(routes::health::router());
+    let api_v1 = Router::new()
+        .merge(routes::health::router())
+        .merge(routes::auth::router())
+        .merge(routes::session::router())
+        .merge(routes::admin::router());
 
     Router::new()
         .nest("/api/v1", api_v1)

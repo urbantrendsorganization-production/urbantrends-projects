@@ -11,3 +11,23 @@ publish.workspace = true
 onboardkit-core.workspace = true
 sqlx.workspace = true
 tracing.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+
+# Used only by the `seed` binary (below). db never depends on `integrations`
+# (§2: db -> core), so the seed hashes passwords with argon2id directly; the
+# resulting PHC strings are self-describing and verify fine in the api layer.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+argon2.workspace = true
+getrandom.workspace = true
+dotenvy.workspace = true
+anyhow.workspace = true
+
+[[bin]]
+name = "seed"
+path = "src/bin/seed.rs"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
