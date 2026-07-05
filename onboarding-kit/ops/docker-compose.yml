@@ -20,6 +20,10 @@ x-backend-env: &backend-env
   S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-onboardkit-secret}
   S3_FORCE_PATH_STYLE: "true"
   WORKER_POLL_INTERVAL_SECS: ${WORKER_POLL_INTERVAL_SECS:-5}
+  # Dev/demo only: surfaces OTP codes in API responses so the flow is testable
+  # without a live SMS provider. MUST default off in production (§8).
+  DEV_EXPOSE_OTP: ${DEV_EXPOSE_OTP:-true}
+  CONSENT_TERMS_VERSION: ${CONSENT_TERMS_VERSION:-v1}
 
 services:
   postgres:
@@ -87,6 +91,8 @@ services:
       <<: *backend-env
     depends_on:
       postgres:
+        condition: service_healthy
+      minio:
         condition: service_healthy
 
 volumes:
