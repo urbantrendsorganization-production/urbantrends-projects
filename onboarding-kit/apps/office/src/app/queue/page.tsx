@@ -31,6 +31,20 @@ export default function QueuePage() {
   const [status, setStatus] = useState<Status | "">("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/me", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s: { role?: string } | null) => {
+        if (active && s?.role === "admin") setIsAdmin(true);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -65,9 +79,21 @@ export default function QueuePage() {
           <h1 className="text-2xl font-semibold">Review queue</h1>
           <p className="text-sm text-muted-foreground">{total} application(s)</p>
         </div>
-        <Button variant="outline" onClick={logout}>
-          Sign out
-        </Button>
+        <div className="flex items-center gap-3">
+          {isAdmin ? (
+            <>
+              <Link href="/reports" className="text-sm text-primary hover:underline">
+                Reports
+              </Link>
+              <Link href="/admin" className="text-sm text-primary hover:underline">
+                Admin
+              </Link>
+            </>
+          ) : null}
+          <Button variant="outline" onClick={logout}>
+            Sign out
+          </Button>
+        </div>
       </header>
 
       <div className="mb-4 flex flex-wrap gap-2">

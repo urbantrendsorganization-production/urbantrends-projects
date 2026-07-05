@@ -4,7 +4,7 @@ Working checklist for Claude Code sessions. Read CLAUDE.md first — it is the s
 
 Phases are a dependency sequence, not a schedule. Move to the next phase the moment the "Done when" gate passes — no waiting, no padding. Ship as fast as the gates allow.
 
-**Current phase:** Phase 2/3/4 backend complete + core loop proven; Phase 3 office UI (queue/detail/review actions) done. Remaining: Phase 4 office UI (admin CRUD, reports, exports), Flutter stepper, Phase 5 hardening/deploy.
+**Current phase:** Phase 2/3/4 backend complete + core loop proven; office UI complete through Phase 4 (queue/detail/review actions, admin CRUD, reports+charts, exports). Remaining: `nightly_export_digest` cron, Flutter stepper, Phase 5 hardening/deploy.
 **Last session note:** 2026-07-05 — Stabilised the tree to green (fixed a
 boot-blocking S3 sleep_impl panic, 3 clippy errors, stale tests; regenerated
 `.sqlx`) and committed Phase 1 + the Phase 2 substrate. Wired the **Phase 2
@@ -132,11 +132,11 @@ Office app:
 
 ## Phase 4 — Admin, reporting, export · branch `phase/4-admin-reports`
 
-- [ ] Admin CRUD endpoints + minimal office UI: branches, users, products
-- [ ] `GET /reports/summary`: onboardings per agent/branch/period, avg time-to-approval (from events), rejection reasons breakdown
-- [ ] Office reports page: 3 charts (recharts) + summary cards
-- [ ] CSV export (`csv` crate) + Excel export (`rust_xlsxwriter`)
-- [ ] Per-tenant export column mapping (JSONB spec on tenant row) respected
+- [x] Admin CRUD endpoints (backend) + minimal office UI: branches, users, products (`/admin`; inline create, activate/disable toggles, branch dropdown for users)
+- [x] `GET /reports/summary` (backend): onboardings per agent/branch/period, avg time-to-approval (from events), rejection reasons breakdown
+- [x] Office reports page: 3 charts (recharts — per-agent/per-branch bars, rejection pie) + summary cards + CSV/Excel download buttons
+- [x] CSV export (`csv` crate) + Excel export (`rust_xlsxwriter`) (backend)
+- [x] Per-tenant export column mapping (JSONB spec on tenant row) respected (backend)
 - [ ] `nightly_export_digest` job (02:00 EAT cron tick in worker)
 
 **Done when:** admin can manage the tenant, reports render with seeded data, exports download in both formats.

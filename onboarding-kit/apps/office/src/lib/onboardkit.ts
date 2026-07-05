@@ -91,6 +91,70 @@ export function statusClass(s: Status): string {
   return CLASSES[s] ?? "bg-muted text-muted-foreground";
 }
 
+// --- Admin (Phase 4) ---
+
+export type Role = "agent" | "reviewer" | "admin";
+
+export type Branch = {
+  id: string;
+  name: string;
+  code: string;
+  created_at: string;
+};
+
+export type Product = {
+  id: string;
+  code: string;
+  name: string;
+  is_active: boolean;
+  created_at: string;
+};
+
+export type User = {
+  id: string;
+  branch_id: string | null;
+  full_name: string;
+  phone: string;
+  email: string;
+  role: Role;
+  is_active: boolean;
+  created_at: string;
+};
+
+// --- Reports (Phase 4) ---
+
+export type AgentStat = {
+  agent_id: string;
+  agent_name: string;
+  total: number;
+  approved: number;
+};
+
+export type BranchStat = {
+  branch_id: string;
+  branch_name: string;
+  total: number;
+};
+
+export type RejectionReason = { reason: string; count: number };
+
+export type ReportSummary = {
+  per_agent: AgentStat[];
+  per_branch: BranchStat[];
+  rejection_reasons: RejectionReason[];
+  avg_time_to_approval_secs: number | null;
+};
+
+/** Human-readable duration from seconds (used for time-to-approval). */
+export function humanDuration(secs: number | null): string {
+  if (secs == null) return "—";
+  const h = Math.floor(secs / 3600);
+  const m = Math.round((secs % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m`;
+  return `${Math.round(secs)}s`;
+}
+
 /** Fetch JSON from the authenticated proxy; throws with the API message on error. */
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api/proxy/${path}`, { cache: "no-store", ...init });
