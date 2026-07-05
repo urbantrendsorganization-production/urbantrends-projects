@@ -18,6 +18,18 @@ pub async fn find_by_id(
         .await
 }
 
+/// All tenant ids, oldest first. Used by the worker's nightly digest cron tick
+/// to fan out one job per tenant (§10). The runtime is single-tenant today (§4),
+/// but the digest is tenant-agnostic so it needs no change when that grows.
+///
+/// # Errors
+/// Returns [`sqlx::Error`] on a query failure.
+pub async fn all_ids(exec: impl PgExecutor<'_>) -> Result<Vec<Uuid>, sqlx::Error> {
+    sqlx::query_scalar!(r#"SELECT id FROM tenants ORDER BY created_at"#)
+        .fetch_all(exec)
+        .await
+}
+
 /// The tenant's export column-mapping spec (§7), a JSON object mapping internal
 /// column keys to exported header labels. Empty (`{}`) means use defaults.
 ///

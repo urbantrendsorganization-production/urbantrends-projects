@@ -36,3 +36,12 @@ pub struct SendEmailPayload {
     pub text: String,
     pub html: String,
 }
+
+/// Payload for `nightly_export_digest`: archive one tenant's approved-client
+/// export for a given EAT calendar date. Enqueued by the worker's 02:00 EAT
+/// cron tick, one job per tenant.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NightlyExportDigestPayload {
+    pub tenant_id: Uuid,
+    pub digest_date: chrono::NaiveDate,
+}

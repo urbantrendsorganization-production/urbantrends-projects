@@ -14,35 +14,9 @@ use crate::auth::RequireAdmin;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
-/// Default export columns: `(internal_key, default_header)`, in order.
-const COLUMNS: [(&str, &str); 10] = [
-    ("client_number", "Client Number"),
-    ("full_name", "Full Name"),
-    ("phone", "Phone"),
-    ("national_id_number", "National ID"),
-    ("kra_pin", "KRA PIN"),
-    ("date_of_birth", "Date of Birth"),
-    ("address", "Address"),
-    ("product_code", "Product"),
-    ("branch_name", "Branch"),
-    ("approved_at", "Approved At"),
-];
-
-fn cell(row: &ApprovedClientRow, key: &str) -> String {
-    match key {
-        "client_number" => row.client_number.clone().unwrap_or_default(),
-        "full_name" => row.full_name.clone(),
-        "phone" => row.phone.clone().unwrap_or_default(),
-        "national_id_number" => row.national_id_number.clone().unwrap_or_default(),
-        "kra_pin" => row.kra_pin.clone().unwrap_or_default(),
-        "date_of_birth" => row.date_of_birth.map(|d| d.to_string()).unwrap_or_default(),
-        "address" => row.address.clone().unwrap_or_default(),
-        "product_code" => row.product_code.clone(),
-        "branch_name" => row.branch_name.clone(),
-        "approved_at" => row.approved_at.to_rfc3339(),
-        _ => String::new(),
-    }
-}
+// Column set, cell rendering, header resolution, and CSV rendering are shared
+// with the worker's nightly digest via `onboardkit_db::exports`. The xlsx path
+// stays here (the worker archives CSV only).
 
 #[derive(Deserialize)]
 struct ExportQuery {
@@ -57,18 +31,7 @@ async fn approved_clients(
 ) -> AppResult<Response> {
     let rows = exports::approved_clients(&state.pool, user.tenant_id()).await?;
     let mapping = tenants::export_column_mapping(&state.pool, user.tenant_id()).await?;
-
-    // Header for each column: tenant override by internal key, else the default.
-    let headers: Vec<String> = COLUMNS
-        .iter()
-        .map(|(key, default)| {
-            mapping
-                .get(*key)
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or(default)
-                .to_owned()
-        })
-        .collect();
+    let headers = exports::headers(&mapping);
 
     match q.format.as_deref().unwrap_or("csv") {
         "xlsx" => xlsx_response(&headers, &rows),
@@ -80,15 +43,7 @@ async fn approved_clients(
 }
 
 fn csv_response(headers: &[String], rows: &[ApprovedClientRow]) -> AppResult<Response> {
-    let mut wtr = csv::Writer::from_writer(Vec::new());
-    wtr.write_record(headers)
-        .map_err(|e| AppError::Internal(e.into()))?;
-    for row in rows {
-        let record: Vec<String> = COLUMNS.iter().map(|(key, _)| cell(row, key)).collect();
-        wtr.write_record(&record)
-            .map_err(|e| AppError::Internal(e.into()))?;
-    }
-    let bytes = wtr.into_inner().map_err(|e| AppError::Internal(e.into()))?;
+    let bytes = exports::render_csv(headers, rows).map_err(|e| AppError::Internal(e.into()))?;
     Ok((
         [
             (CONTENT_TYPE, "text/csv; charset=utf-8"),
@@ -117,10 +72,10 @@ fn xlsx_response(headers: &[String], rows: &[ApprovedClientRow]) -> AppResult<Re
     }
     for (r, row) in rows.iter().enumerate() {
         let excel_row = u32::try_from(r + 1).unwrap_or(u32::MAX);
-        for (c, (key, _)) in COLUMNS.iter().enumerate() {
+        for (c, (key, _)) in exports::COLUMNS.iter().enumerate() {
             let col = u16::try_from(c).unwrap_or(u16::MAX);
             sheet
-                .write_string(excel_row, col, cell(row, key))
+                .write_string(excel_row, col, exports::cell(row, key))
                 .map_err(|e| AppError::Internal(e.into()))?;
         }
     }

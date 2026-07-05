@@ -10,8 +10,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
-use onboardkit_core::jobs::{ProcessImagePayload, SendSmsPayload, job_type};
+use chrono::{NaiveDate, Timelike, Utc};
+use onboardkit_core::jobs::{
+    NightlyExportDigestPayload, ProcessImagePayload, SendSmsPayload, job_type,
+};
 use onboardkit_db::jobs::{self, Job};
 use onboardkit_integrations::sms::{MockProvider, SmsProvider};
 use onboardkit_integrations::{ObjectStore, Phone, image_ops, storage};
@@ -62,7 +64,13 @@ enum JobError {
     Image(String),
     #[error("sms: {0}")]
     Sms(String),
+    #[error("export: {0}")]
+    Export(String),
 }
+
+/// EAT is UTC+3 (no DST). The nightly digest fires at 02:00 EAT.
+const EAT_OFFSET_HOURS: i64 = 3;
+const DIGEST_HOUR_EAT: u32 = 2;
 
 /// Run the worker poll loop until a shutdown signal is received.
 ///
@@ -88,9 +96,16 @@ pub async fn run(pool: PgPool, storage: ObjectStore, config: WorkerConfig) -> an
     let mut ticker = tokio::time::interval(config.poll_interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+    // Tracks the last EAT date the nightly digest was enqueued for, so it fires
+    // once per day. The DB `(tenant, date)` guard covers restarts.
+    let mut last_digest_date: Option<NaiveDate> = None;
+
     loop {
         tokio::select! {
             _ = ticker.tick() => {
+                // Cron tick: enqueue nightly export digests at 02:00 EAT.
+                last_digest_date = maybe_enqueue_digests(&pool, last_digest_date).await;
+
                 // Drain all currently-due jobs before sleeping again.
                 loop {
                     match jobs::claim_next(&pool, &worker_id).await {
@@ -119,6 +134,7 @@ async fn run_one(ctx: &Ctx, job: Job) {
     let result = match job.job_type.as_str() {
         job_type::PROCESS_IMAGE => process_image(ctx, &job).await,
         job_type::SEND_SMS => send_sms(ctx, &job).await,
+        job_type::NIGHTLY_EXPORT_DIGEST => nightly_export_digest(ctx, &job).await,
         other => {
             tracing::warn!(job_id = %job_id, job_type = other, "unknown job type");
             Err(JobError::BadPayload(format!("unknown job type {other}")))
@@ -212,6 +228,95 @@ async fn send_sms(ctx: &Ctx, job: &Job) -> Result<(), JobError> {
         .map_err(|e| JobError::Sms(e.to_string()))?;
     tracing::info!(provider = receipt.provider, "sms sent");
     Ok(())
+}
+
+/// `nightly_export_digest`: archive one tenant's approved-clients export (CSV,
+/// tenant column mapping applied) to object storage under a dated key. Idempotent
+/// — a digest already recorded for `(tenant, date)` is a no-op success, so a
+/// re-delivered or re-enqueued job never double-writes the ledger.
+async fn nightly_export_digest(ctx: &Ctx, job: &Job) -> Result<(), JobError> {
+    let payload: NightlyExportDigestPayload = serde_json::from_value(job.payload.clone())
+        .map_err(|e| JobError::BadPayload(e.to_string()))?;
+    let tenant = payload.tenant_id;
+    let date = payload.digest_date;
+
+    if onboardkit_db::export_digests::exists(&ctx.pool, tenant, date).await? {
+        return Ok(());
+    }
+
+    let rows = onboardkit_db::exports::approved_clients(&ctx.pool, tenant).await?;
+    let mapping = onboardkit_db::tenants::export_column_mapping(&ctx.pool, tenant).await?;
+    let headers = onboardkit_db::exports::headers(&mapping);
+    let csv = onboardkit_db::exports::render_csv(&headers, &rows)
+        .map_err(|e| JobError::Export(e.to_string()))?;
+
+    let key = format!("tenants/{tenant}/exports/approved-clients-{date}.csv");
+    ctx.storage
+        .put(&key, csv, "text/csv; charset=utf-8")
+        .await
+        .map_err(|e| JobError::Storage(e.to_string()))?;
+
+    let row_count = i32::try_from(rows.len()).unwrap_or(i32::MAX);
+    onboardkit_db::export_digests::record(&ctx.pool, tenant, date, &key, row_count).await?;
+    tracing::info!(%tenant, %date, row_count, "export digest archived");
+    Ok(())
+}
+
+/// Current EAT (UTC+3) wall-clock date and hour, derived by shifting UTC — EAT
+/// observes no DST so a fixed offset is exact.
+fn eat_now() -> (NaiveDate, u32) {
+    let shifted = Utc::now() + chrono::Duration::hours(EAT_OFFSET_HOURS);
+    (shifted.date_naive(), shifted.hour())
+}
+
+/// If it is on or after 02:00 EAT and today's digest hasn't been enqueued yet in
+/// this process, fan out one `nightly_export_digest` job per tenant (skipping any
+/// already archived for the date). Returns the date it ran for so the caller can
+/// avoid re-running until the next EAT day. Duplicate enqueues across restarts are
+/// harmless — the handler is idempotent.
+async fn maybe_enqueue_digests(pool: &PgPool, last_run: Option<NaiveDate>) -> Option<NaiveDate> {
+    let (date, hour) = eat_now();
+    if hour < DIGEST_HOUR_EAT || last_run == Some(date) {
+        return last_run;
+    }
+
+    let tenants = match onboardkit_db::tenants::all_ids(pool).await {
+        Ok(t) => t,
+        Err(error) => {
+            tracing::error!(%error, "digest cron: failed to list tenants");
+            return last_run;
+        }
+    };
+
+    let mut enqueued = 0_usize;
+    for tenant_id in tenants {
+        match onboardkit_db::export_digests::exists(pool, tenant_id, date).await {
+            Ok(true) => continue, // already archived (e.g. before a restart)
+            Ok(false) => {}
+            Err(error) => {
+                tracing::error!(%error, %tenant_id, "digest cron: exists check failed");
+                return last_run; // retry next tick rather than partially enqueue
+            }
+        }
+        let payload = match serde_json::to_value(NightlyExportDigestPayload {
+            tenant_id,
+            digest_date: date,
+        }) {
+            Ok(v) => v,
+            Err(error) => {
+                tracing::error!(%error, "digest cron: payload serialize failed");
+                return last_run;
+            }
+        };
+        if let Err(error) = jobs::enqueue(pool, job_type::NIGHTLY_EXPORT_DIGEST, payload).await {
+            tracing::error!(%error, %tenant_id, "digest cron: enqueue failed");
+            return last_run; // leave last_run unset so the next tick retries
+        }
+        enqueued += 1;
+    }
+
+    tracing::info!(%date, enqueued, "nightly export digests enqueued");
+    Some(date)
 }
 
 /// Resolve when the process receives Ctrl-C or (on Unix) `SIGTERM`.

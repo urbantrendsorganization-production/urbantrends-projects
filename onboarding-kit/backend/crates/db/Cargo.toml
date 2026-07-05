@@ -15,6 +15,7 @@ chrono.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
 serde_json.workspace = true
+csv.workspace = true
 
 # Used only by the `seed` binary (below). db never depends on `integrations`
 # (§2: db -> core), so the seed hashes passwords with argon2id directly; the

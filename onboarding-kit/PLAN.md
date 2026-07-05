@@ -137,9 +137,9 @@ Office app:
 - [x] Office reports page: 3 charts (recharts — per-agent/per-branch bars, rejection pie) + summary cards + CSV/Excel download buttons
 - [x] CSV export (`csv` crate) + Excel export (`rust_xlsxwriter`) (backend)
 - [x] Per-tenant export column mapping (JSONB spec on tenant row) respected (backend)
-- [ ] `nightly_export_digest` job (02:00 EAT cron tick in worker)
+- [x] `nightly_export_digest` job (02:00 EAT cron tick in worker) — fans out one job/tenant, archives approved-clients CSV (tenant column mapping applied) to object storage under `tenants/{id}/exports/approved-clients-{date}.csv`; idempotent via `export_digests` `(tenant, date)` unique guard. CSV rendering shared with the api export via `db::exports`.
 
-**Done when:** admin can manage the tenant, reports render with seeded data, exports download in both formats.
+**Done when:** admin can manage the tenant, reports render with seeded data, exports download in both formats. **Phase 4 complete** (backend + office UI + nightly digest).
 
 ---
 
@@ -221,6 +221,19 @@ Record any decision not covered by CLAUDE.md here (date, decision, why). Keep CL
 - 2026-07-03 — **Migrations are embedded (`sqlx::migrate!`) and run at
   api/worker/seed startup.** A fresh database self-provisions on boot; no
   separate `migrate` binary. Codifies the schema-source-of-truth in `db`.
+- 2026-07-05 — **Nightly export digest archives per-tenant CSV to object
+  storage; EAT handled by a fixed +3h shift.** §10 names the job but not its
+  output; the faithful, demoable interpretation is "archive the approved-clients
+  export nightly." The worker's poll loop doubles as the cron: each tick computes
+  EAT wall-clock (UTC+3, no DST — a plain `+3h` shift, no `FixedOffset`/unwrap)
+  and, at/after 02:00 EAT once per day, enqueues one `nightly_export_digest` job
+  per tenant. The handler renders CSV (shared `db::exports` renderer, tenant
+  column mapping applied) and uploads to
+  `tenants/{id}/exports/approved-clients-{date}.csv`. Idempotency: new
+  `export_digests` table with `UNIQUE(tenant_id, digest_date)` — the cron skips
+  tenants already archived for the date, and the handler no-ops on an existing
+  row, so both at-least-once paths are safe. CSV column set/rendering was lifted
+  from `api` into `db::exports` so api and worker stay in sync.
 - 2026-07-03 — **Refresh-token reuse is detected and rejected.** Rotation revokes
   the presented token and issues a new one in one transaction; if the presented
   token was already revoked, rotation returns `None` and the endpoint answers

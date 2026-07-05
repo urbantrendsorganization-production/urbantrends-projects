@@ -12,6 +12,7 @@ pub mod branches;
 pub mod clients;
 pub mod documents;
 pub mod events;
+pub mod export_digests;
 pub mod exports;
 pub mod jobs;
 pub mod models;
