@@ -11,9 +11,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use onboardkit_core::jobs::{ProcessImagePayload, job_type};
+use onboardkit_core::jobs::{ProcessImagePayload, SendSmsPayload, job_type};
 use onboardkit_db::jobs::{self, Job};
-use onboardkit_integrations::{ObjectStore, image_ops, storage};
+use onboardkit_integrations::sms::{MockProvider, SmsProvider};
+use onboardkit_integrations::{ObjectStore, Phone, image_ops, storage};
 use sqlx::postgres::PgPool;
 use tokio::signal;
 
@@ -44,6 +45,7 @@ impl Default for WorkerConfig {
 struct Ctx {
     pool: PgPool,
     storage: Arc<ObjectStore>,
+    sms: Arc<dyn SmsProvider>,
 }
 
 /// A handler failure. All variants are recorded on the job row; retryable ones
@@ -58,6 +60,8 @@ enum JobError {
     Storage(String),
     #[error("image: {0}")]
     Image(String),
+    #[error("sms: {0}")]
+    Sms(String),
 }
 
 /// Run the worker poll loop until a shutdown signal is received.
@@ -73,9 +77,12 @@ pub async fn run(pool: PgPool, storage: ObjectStore, config: WorkerConfig) -> an
         "worker started"
     );
 
+    // SMS provider: MockProvider in dev/demo. Production wires the
+    // AfricasTalking → Infobip FallbackProvider here (§9).
     let ctx = Ctx {
         pool: pool.clone(),
         storage: Arc::new(storage),
+        sms: Arc::new(MockProvider),
     };
 
     let mut ticker = tokio::time::interval(config.poll_interval);
@@ -111,6 +118,7 @@ async fn run_one(ctx: &Ctx, job: Job) {
     let job_id = job.id;
     let result = match job.job_type.as_str() {
         job_type::PROCESS_IMAGE => process_image(ctx, &job).await,
+        job_type::SEND_SMS => send_sms(ctx, &job).await,
         other => {
             tracing::warn!(job_id = %job_id, job_type = other, "unknown job type");
             Err(JobError::BadPayload(format!("unknown job type {other}")))
@@ -186,6 +194,23 @@ async fn process_image(ctx: &Ctx, job: &Job) -> Result<(), JobError> {
 
     onboardkit_db::documents::mark_processed(&ctx.pool, doc.id, Some(&thumb_key)).await?;
     tracing::info!(document_id = %doc.id, "image processed");
+    Ok(())
+}
+
+/// `send_sms`: deliver one message via the configured provider. The payload may
+/// contain a one-time code, so it is never logged (§8).
+async fn send_sms(ctx: &Ctx, job: &Job) -> Result<(), JobError> {
+    let payload: SendSmsPayload = serde_json::from_value(job.payload.clone())
+        .map_err(|e| JobError::BadPayload(e.to_string()))?;
+    let phone = Phone::parse(&payload.to_phone)
+        .map_err(|_| JobError::BadPayload("invalid phone".into()))?;
+
+    let receipt = ctx
+        .sms
+        .send(&phone, &payload.message)
+        .await
+        .map_err(|e| JobError::Sms(e.to_string()))?;
+    tracing::info!(provider = receipt.provider, "sms sent");
     Ok(())
 }
 

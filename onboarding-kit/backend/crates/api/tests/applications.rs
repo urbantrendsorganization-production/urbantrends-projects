@@ -228,6 +228,138 @@ async fn submit_incomplete_application_is_rejected(pool: PgPool) {
     assert_eq!(body["error"]["code"], "validation_error");
 }
 
+/// Insert a client with a phone and a `submitted` application owned by a fresh
+/// agent in `branch`. Returns the application id.
+async fn seed_submitted_application(pool: &PgPool, tenant_id: Uuid, branch_id: Uuid) -> Uuid {
+    sqlx::query("INSERT INTO tenants (id, name) VALUES ($1, 'Test Tenant') ON CONFLICT DO NOTHING")
+        .bind(tenant_id)
+        .execute(pool)
+        .await
+        .expect("tenant");
+    sqlx::query(
+        "INSERT INTO branches (id, tenant_id, name, code) VALUES ($1, $2, 'Thika', $3)
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(branch_id)
+    .bind(tenant_id)
+    .bind(&branch_id.to_string()[..8])
+    .execute(pool)
+    .await
+    .expect("branch");
+
+    let agent_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO users (id, tenant_id, branch_id, full_name, phone, email, password_hash, role)
+         VALUES ($1, $2, $3, 'Agent', $4, $5, 'x', 'agent')",
+    )
+    .bind(agent_id)
+    .bind(tenant_id)
+    .bind(branch_id)
+    .bind(format!("+2547{:08}", rand_digits()))
+    .bind(format!("agent.{agent_id}@example.com"))
+    .execute(pool)
+    .await
+    .expect("agent");
+
+    let client_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO clients (id, tenant_id, full_name, phone) VALUES ($1, $2, $3, $4)")
+        .bind(client_id)
+        .bind(tenant_id)
+        .bind("Grace Njeri")
+        .bind(format!("+2547{:08}", rand_digits()))
+        .execute(pool)
+        .await
+        .expect("client");
+
+    let app_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO onboarding_applications
+           (id, tenant_id, client_id, agent_id, branch_id, product_code, current_status, submitted_at)
+         VALUES ($1, $2, $3, $4, $5, 'SAVINGS', 'submitted', now())",
+    )
+    .bind(app_id)
+    .bind(tenant_id)
+    .bind(client_id)
+    .bind(agent_id)
+    .bind(branch_id)
+    .execute(pool)
+    .await
+    .expect("application");
+    app_id
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn reviewer_starts_review_then_approves_and_assigns_client_number(pool: PgPool) {
+    let tenant = Uuid::new_v4();
+    let branch = Uuid::new_v4();
+    let reviewer = seed_user(&pool, tenant, branch, "reviewer").await;
+    let app_id = seed_submitted_application(&pool, tenant, branch).await;
+    let app = app(pool);
+    let token = login(&app, &reviewer.email).await;
+
+    let uri = format!("/api/v1/applications/{app_id}/review");
+    let (status, body) = send(
+        &app,
+        post(&uri, &token, &json!({ "action": "start_review" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "under_review");
+
+    let (status, body) = send(&app, post(&uri, &token, &json!({ "action": "approve" }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "approved");
+
+    // The client now has a tenant-scoped number ("Test Tenant" -> "TT-00001").
+    let (status, detail) = send(&app, get(&format!("/api/v1/applications/{app_id}"), &token)).await;
+    assert_eq!(status, StatusCode::OK);
+    let number = detail["client"]["client_number"].as_str().unwrap();
+    assert!(number.starts_with("TT-"), "unexpected number {number}");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn reject_without_reason_is_rejected(pool: PgPool) {
+    let tenant = Uuid::new_v4();
+    let branch = Uuid::new_v4();
+    let reviewer = seed_user(&pool, tenant, branch, "reviewer").await;
+    let app_id = seed_submitted_application(&pool, tenant, branch).await;
+    let app = app(pool);
+    let token = login(&app, &reviewer.email).await;
+
+    let uri = format!("/api/v1/applications/{app_id}/review");
+    // Move to under_review first (reject is only valid from there).
+    send(
+        &app,
+        post(&uri, &token, &json!({ "action": "start_review" })),
+    )
+    .await;
+    let (status, body) = send(&app, post(&uri, &token, &json!({ "action": "reject" }))).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn reviewer_cannot_review_another_branch(pool: PgPool) {
+    let tenant = Uuid::new_v4();
+    let branch_a = Uuid::new_v4();
+    let branch_b = Uuid::new_v4();
+    // Reviewer belongs to branch B; the application is in branch A.
+    let reviewer = seed_user(&pool, tenant, branch_b, "reviewer").await;
+    let app_id = seed_submitted_application(&pool, tenant, branch_a).await;
+    let app = app(pool);
+    let token = login(&app, &reviewer.email).await;
+
+    let (status, _) = send(
+        &app,
+        post(
+            &format!("/api/v1/applications/{app_id}/review"),
+            &token,
+            &json!({ "action": "start_review" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
 #[sqlx::test(migrations = "../../migrations")]
 async fn reviewer_cannot_create_clients(pool: PgPool) {
     let tenant = Uuid::new_v4();

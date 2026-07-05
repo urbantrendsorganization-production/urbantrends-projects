@@ -10,4 +10,5 @@ pub mod dto;
 pub mod guard;
 pub mod health;
 pub mod otp;
+pub mod review;
 pub mod session;
