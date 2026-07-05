@@ -96,7 +96,11 @@ pub struct DocumentResponse {
 }
 
 #[must_use]
-pub fn document_dto(d: KycDocument, url: String, thumbnail_url: Option<String>) -> DocumentResponse {
+pub fn document_dto(
+    d: KycDocument,
+    url: String,
+    thumbnail_url: Option<String>,
+) -> DocumentResponse {
     DocumentResponse {
         id: d.id,
         doc_type: d.doc_type,

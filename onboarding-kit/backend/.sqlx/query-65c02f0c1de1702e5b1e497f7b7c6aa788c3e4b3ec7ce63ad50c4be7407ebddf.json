@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, tenant_id, client_id, agent_id, branch_id, product_code,\n                  current_status, otp_verified_at, consent_at, consent_terms_version,\n                  submitted_at, created_at, updated_at\n           FROM onboarding_applications\n           WHERE tenant_id = $1\n             AND ($2::uuid IS NULL OR agent_id = $2)\n             AND ($3::uuid IS NULL OR branch_id = $3)\n             AND ($4::text IS NULL OR current_status = $4)\n           ORDER BY created_at DESC\n           LIMIT $5 OFFSET $6",
+  "query": "SELECT id, tenant_id, client_id, agent_id, branch_id, product_code,\n                  current_status, otp_verified_at, consent_at, consent_terms_version,\n                  submitted_at, created_at, updated_at\n           FROM onboarding_applications\n           WHERE tenant_id = $1\n             AND ($2::uuid IS NULL OR agent_id = $2)\n             AND ($3::uuid IS NULL OR branch_id = $3)\n             AND ($4::text IS NULL OR current_status = $4)\n             AND (NOT $5::bool OR current_status <> 'draft')\n           ORDER BY created_at DESC\n           LIMIT $6 OFFSET $7",
   "describe": {
     "columns": [
       {
@@ -75,6 +75,7 @@
         "Uuid",
         "Uuid",
         "Text",
+        "Bool",
         "Int8",
         "Int8"
       ]
@@ -95,5 +96,5 @@
       false
     ]
   },
-  "hash": "e37bb571023ccf770c89207578c2d3b26a0644f044c543840f19cd57a9412b24"
+  "hash": "65c02f0c1de1702e5b1e497f7b7c6aa788c3e4b3ec7ce63ad50c4be7407ebddf"
 }

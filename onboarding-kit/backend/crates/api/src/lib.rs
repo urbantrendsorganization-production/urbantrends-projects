@@ -5,7 +5,13 @@
 //! tests build the app without spawning a process (CLAUDE.md §16).
 
 #![warn(clippy::pedantic)]
-#![allow(clippy::module_name_repetitions, clippy::doc_markdown)]
+#![allow(
+    clippy::module_name_repetitions,
+    clippy::doc_markdown,
+    // TTL constants are intentionally expressed in seconds for direct comparison
+    // with the CLAUDE.md §11 limits (PUT ≤ 10 min, GET ≤ 5 min).
+    clippy::duration_suboptimal_units
+)]
 
 pub mod auth;
 pub mod config;
@@ -28,7 +34,12 @@ pub fn build_router(state: AppState) -> Router {
         .merge(routes::health::router())
         .merge(routes::auth::router())
         .merge(routes::session::router())
-        .merge(routes::admin::router());
+        .merge(routes::admin::router())
+        .merge(routes::clients::router())
+        .merge(routes::applications::router())
+        .merge(routes::documents::router())
+        .merge(routes::otp::router())
+        .merge(routes::consent::router());
 
     Router::new()
         .nest("/api/v1", api_v1)

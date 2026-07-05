@@ -2089,14 +2089,18 @@ name = "onboardkit-jobs"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "dotenvy",
  "onboardkit-core",
  "onboardkit-db",
  "onboardkit-integrations",
+ "serde_json",
  "sqlx",
+ "thiserror",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

@@ -26,6 +26,8 @@ pub struct ApplicationFilter {
     pub agent_id: Option<Uuid>,
     pub branch_id: Option<Uuid>,
     pub status: Option<StatusKind>,
+    /// Hide `draft` applications — reviewers never see another actor's drafts (§7).
+    pub exclude_draft: bool,
 }
 
 fn decode_error(err: impl std::error::Error + Send + Sync + 'static) -> sqlx::Error {
@@ -151,12 +153,14 @@ pub async fn list(
              AND ($2::uuid IS NULL OR agent_id = $2)
              AND ($3::uuid IS NULL OR branch_id = $3)
              AND ($4::text IS NULL OR current_status = $4)
+             AND (NOT $5::bool OR current_status <> 'draft')
            ORDER BY created_at DESC
-           LIMIT $5 OFFSET $6"#,
+           LIMIT $6 OFFSET $7"#,
         tenant_id,
         filter.agent_id,
         filter.branch_id,
         status,
+        filter.exclude_draft,
         limit,
         offset,
     )
@@ -200,11 +204,13 @@ pub async fn count(
            WHERE tenant_id = $1
              AND ($2::uuid IS NULL OR agent_id = $2)
              AND ($3::uuid IS NULL OR branch_id = $3)
-             AND ($4::text IS NULL OR current_status = $4)"#,
+             AND ($4::text IS NULL OR current_status = $4)
+             AND (NOT $5::bool OR current_status <> 'draft')"#,
         tenant_id,
         filter.agent_id,
         filter.branch_id,
         status,
+        filter.exclude_draft,
     )
     .fetch_one(exec)
     .await?;

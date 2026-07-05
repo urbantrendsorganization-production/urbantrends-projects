@@ -9,6 +9,7 @@
 use std::time::Duration;
 
 use onboardkit_db::PoolConfig;
+use onboardkit_integrations::{ObjectStore, StorageConfig};
 use onboardkit_jobs::WorkerConfig;
 
 #[tokio::main]
@@ -22,8 +23,24 @@ async fn main() -> anyhow::Result<()> {
     let poll_interval = env_duration_secs("WORKER_POLL_INTERVAL_SECS", 5);
 
     let pool = onboardkit_db::connect(&database_url, &PoolConfig::default()).await?;
+    let storage = ObjectStore::new(&storage_config_from_env()?);
 
-    onboardkit_jobs::run(pool, WorkerConfig { poll_interval }).await
+    onboardkit_jobs::run(pool, storage, WorkerConfig { poll_interval }).await
+}
+
+/// Build the object-store config from the environment (mirrors the API's).
+fn storage_config_from_env() -> anyhow::Result<StorageConfig> {
+    Ok(StorageConfig {
+        endpoint: require_env("S3_ENDPOINT")?,
+        region: std::env::var("S3_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
+        bucket: require_env("S3_BUCKET")?,
+        access_key_id: require_env("S3_ACCESS_KEY_ID")?,
+        secret_access_key: require_env("S3_SECRET_ACCESS_KEY")?,
+        force_path_style: std::env::var("S3_FORCE_PATH_STYLE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(true),
+    })
 }
 
 /// Initialise `tracing`: JSON logs when `APP_ENV=production`, pretty otherwise.
