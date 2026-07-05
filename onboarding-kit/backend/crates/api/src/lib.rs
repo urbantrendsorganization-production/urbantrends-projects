@@ -40,7 +40,9 @@ pub fn build_router(state: AppState) -> Router {
         .merge(routes::documents::router())
         .merge(routes::otp::router())
         .merge(routes::consent::router())
-        .merge(routes::review::router());
+        .merge(routes::review::router())
+        .merge(routes::reports::router())
+        .merge(routes::exports::router());
 
     Router::new()
         .nest("/api/v1", api_v1)

@@ -37,6 +37,8 @@ uuid.workspace = true
 dotenvy.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
+csv.workspace = true
+rust_xlsxwriter.workspace = true
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

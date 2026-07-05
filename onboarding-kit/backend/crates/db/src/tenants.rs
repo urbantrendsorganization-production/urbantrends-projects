@@ -17,3 +17,21 @@ pub async fn find_by_id(
         .fetch_optional(exec)
         .await
 }
+
+/// The tenant's export column-mapping spec (§7), a JSON object mapping internal
+/// column keys to exported header labels. Empty (`{}`) means use defaults.
+///
+/// # Errors
+/// Returns [`sqlx::Error`] on a query failure.
+pub async fn export_column_mapping(
+    exec: impl PgExecutor<'_>,
+    id: Uuid,
+) -> Result<serde_json::Value, sqlx::Error> {
+    let row = sqlx::query!(
+        r#"SELECT export_column_mapping FROM tenants WHERE id = $1"#,
+        id,
+    )
+    .fetch_one(exec)
+    .await?;
+    Ok(row.export_column_mapping)
+}

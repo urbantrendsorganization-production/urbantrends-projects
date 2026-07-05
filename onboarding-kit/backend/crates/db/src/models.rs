@@ -49,6 +49,27 @@ pub struct Tenant {
     pub name: String,
 }
 
+/// A branch office (§5).
+#[derive(Debug, Clone)]
+pub struct Branch {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub name: String,
+    pub code: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// A product offered by the tenant (migration 0004).
+#[derive(Debug, Clone)]
+pub struct Product {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub code: String,
+    pub name: String,
+    pub is_active: bool,
+    pub created_at: DateTime<Utc>,
+}
+
 /// A client being onboarded (§5). Most fields are optional until filled in
 /// during the draft.
 #[derive(Debug, Clone)]

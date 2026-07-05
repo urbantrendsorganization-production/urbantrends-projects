@@ -8,18 +8,23 @@
 #![allow(clippy::module_name_repetitions, clippy::doc_markdown)]
 
 pub mod applications;
+pub mod branches;
 pub mod clients;
 pub mod documents;
 pub mod events;
+pub mod exports;
 pub mod jobs;
 pub mod models;
 pub mod otp;
+pub mod products;
 pub mod refresh_tokens;
+pub mod reports;
 pub mod tenants;
 pub mod users;
 
 pub use models::{
-    Application, ApplicationEvent, Client, KycDocument, OtpRow, RefreshToken, Tenant, User,
+    Application, ApplicationEvent, Branch, Client, KycDocument, OtpRow, Product, RefreshToken,
+    Tenant, User,
 };
 
 use std::time::Duration;
