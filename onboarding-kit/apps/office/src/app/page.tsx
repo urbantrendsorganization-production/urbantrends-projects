@@ -110,9 +110,14 @@ export default function Home() {
             <p className="text-sm text-destructive">{health.message}</p>
           ) : null}
           {loading ? null : session ? (
-            <Button onClick={logout} variant="outline" className="w-full">
-              Sign out
-            </Button>
+            <div className="space-y-2">
+              <Link href="/queue" className={cn(buttonVariants(), "w-full")}>
+                Go to review queue
+              </Link>
+              <Button onClick={logout} variant="outline" className="w-full">
+                Sign out
+              </Button>
+            </div>
           ) : (
             <Link href="/login" className={cn(buttonVariants(), "w-full")}>
               Sign in

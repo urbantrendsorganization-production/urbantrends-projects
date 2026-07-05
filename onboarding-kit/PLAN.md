@@ -4,7 +4,7 @@ Working checklist for Claude Code sessions. Read CLAUDE.md first — it is the s
 
 Phases are a dependency sequence, not a schedule. Move to the next phase the moment the "Done when" gate passes — no waiting, no padding. Ship as fast as the gates allow.
 
-**Current phase:** Phase 2/3 backend complete + core loop proven; Phase 4 (admin/reports/export), frontends, and hardening/deploy remain.
+**Current phase:** Phase 2/3/4 backend complete + core loop proven; Phase 3 office UI (queue/detail/review actions) done. Remaining: Phase 4 office UI (admin CRUD, reports, exports), Flutter stepper, Phase 5 hardening/deploy.
 **Last session note:** 2026-07-05 — Stabilised the tree to green (fixed a
 boot-blocking S3 sleep_impl panic, 3 clippy errors, stale tests; regenerated
 `.sqlx`) and committed Phase 1 + the Phase 2 substrate. Wired the **Phase 2
@@ -122,9 +122,9 @@ Backend:
 - [~] `send_sms` job wired to approval/rejection/return events; provider-used-on-job-row NOT recorded yet
 
 Office app:
-- [ ] Review queue table (filters, status badges, pagination)
-- [ ] Application detail: form data side-by-side with document viewer
-- [ ] Action modals: approve / reject (reason required) / return (notes required)
+- [x] Review queue table (status filters, badges, per_page=100; authed proxy)
+- [x] Application detail: client data side-by-side with document viewer (presigned URLs + thumbnails) + history timeline
+- [x] Action modals: start_review / approve / reject (reason required) / return (notes required)
 
 **Done when:** full loop works — onboard on phone → approve on desktop → SMS lands (MockProvider in dev; one manual live-provider test).
 
