@@ -13,6 +13,7 @@ use onboardkit_db::documents::NewDocument;
 use onboardkit_db::{documents, jobs};
 use onboardkit_integrations::{mime, storage};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::auth::RequireAgent;
@@ -37,14 +38,14 @@ fn validate_doc_type(doc_type: &str) -> AppResult<()> {
 
 // ---- Presign --------------------------------------------------------------
 
-#[derive(Deserialize)]
-struct PresignRequest {
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct PresignRequest {
     doc_type: String,
     content_type: String,
 }
 
-#[derive(Serialize)]
-struct PresignResponse {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct PresignResponse {
     url: String,
     storage_key: String,
     expires_in: u64,
@@ -53,8 +54,20 @@ struct PresignResponse {
 /// `POST /applications/:id/documents/presign` — a short-lived PUT URL the client
 /// uploads to directly. The content type is pinned into the signature; real
 /// validation happens on confirm.
+#[utoipa::path(
+    post,
+    path = "/api/v1/applications/{id}/documents/presign",
+    tag = "documents",
+    security(("bearer_auth" = [])),
+    params(("id" = Uuid, Path, description = "Application id")),
+    request_body = PresignRequest,
+    responses(
+        (status = 200, description = "Presigned PUT URL + storage key", body = PresignResponse),
+        (status = 422, description = "Unknown doc type or disallowed content type"),
+    ),
+)]
 #[tracing::instrument(skip_all)]
-async fn presign(
+pub(crate) async fn presign(
     State(state): State<AppState>,
     RequireAgent(user): RequireAgent,
     Path(id): Path<Uuid>,
@@ -85,15 +98,15 @@ async fn presign(
 
 // ---- Confirm --------------------------------------------------------------
 
-#[derive(Deserialize)]
-struct ConfirmRequest {
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct ConfirmRequest {
     doc_type: String,
     storage_key: String,
     original_filename: String,
 }
 
-#[derive(Serialize)]
-struct ConfirmResponse {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct ConfirmResponse {
     id: Uuid,
     doc_type: String,
     processed: bool,
@@ -101,8 +114,20 @@ struct ConfirmResponse {
 
 /// `POST /applications/:id/documents/confirm` — verify the uploaded object
 /// (exists, size, sniffed MIME), record it, and enqueue image processing.
+#[utoipa::path(
+    post,
+    path = "/api/v1/applications/{id}/documents/confirm",
+    tag = "documents",
+    security(("bearer_auth" = [])),
+    params(("id" = Uuid, Path, description = "Application id")),
+    request_body = ConfirmRequest,
+    responses(
+        (status = 201, description = "Document recorded; processing enqueued", body = ConfirmResponse),
+        (status = 422, description = "Object missing, wrong size, or disallowed type"),
+    ),
+)]
 #[tracing::instrument(skip_all)]
-async fn confirm(
+pub(crate) async fn confirm(
     State(state): State<AppState>,
     RequireAgent(user): RequireAgent,
     Path(id): Path<Uuid>,

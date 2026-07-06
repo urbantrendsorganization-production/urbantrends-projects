@@ -7,6 +7,7 @@ use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use onboardkit_db::reports;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::auth::RequireAdmin;
@@ -14,42 +15,53 @@ use crate::error::AppResult;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
-struct ReportQuery {
+pub(crate) struct ReportQuery {
     from: Option<DateTime<Utc>>,
     to: Option<DateTime<Utc>>,
 }
 
-#[derive(Serialize)]
-struct AgentStat {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct AgentStat {
     agent_id: Uuid,
     agent_name: String,
     total: i64,
     approved: i64,
 }
 
-#[derive(Serialize)]
-struct BranchStat {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct BranchStat {
     branch_id: Uuid,
     branch_name: String,
     total: i64,
 }
 
-#[derive(Serialize)]
-struct RejectionReason {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct RejectionReason {
     reason: String,
     count: i64,
 }
 
-#[derive(Serialize)]
-struct Summary {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct Summary {
     per_agent: Vec<AgentStat>,
     per_branch: Vec<BranchStat>,
     rejection_reasons: Vec<RejectionReason>,
     avg_time_to_approval_secs: Option<f64>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/reports/summary",
+    tag = "reports",
+    security(("bearer_auth" = [])),
+    params(
+        ("from" = Option<String>, Query, description = "RFC3339 start of window"),
+        ("to" = Option<String>, Query, description = "RFC3339 end of window"),
+    ),
+    responses((status = 200, description = "Onboarding analytics summary", body = Summary)),
+)]
 #[tracing::instrument(skip_all)]
-async fn summary(
+pub(crate) async fn summary(
     State(state): State<AppState>,
     RequireAdmin(user): RequireAdmin,
     Query(q): Query<ReportQuery>,

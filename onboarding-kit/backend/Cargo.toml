@@ -74,6 +74,8 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 infer = "0.16"
 # base64: encode KYC images for the Anthropic vision block (doc_assist, opt-in).
 base64 = "0.22"
+# OpenAPI spec generation (§7) — served at /api/v1/openapi.json for client gen.
+utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
 
 # Observability
 tracing = "0.1"

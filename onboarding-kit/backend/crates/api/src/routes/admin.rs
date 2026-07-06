@@ -11,6 +11,7 @@ use onboardkit_db::users::NewUser;
 use onboardkit_db::{Branch, Product, User, branches, products, users};
 use onboardkit_integrations::{Phone, password};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::auth::RequireAdmin;
@@ -27,15 +28,22 @@ fn conflict_on_unique(e: sqlx::Error, msg: &str) -> AppError {
 
 // ---- Overview -------------------------------------------------------------
 
-#[derive(Serialize)]
-struct AdminOverview {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct AdminOverview {
     tenant_id: Uuid,
     branches: i64,
     users: i64,
     products: i64,
 }
 
-async fn overview(
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/overview",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    responses((status = 200, description = "Tenant resource counts", body = AdminOverview)),
+)]
+pub(crate) async fn overview(
     State(state): State<AppState>,
     RequireAdmin(user): RequireAdmin,
 ) -> AppResult<Json<AdminOverview>> {
@@ -55,8 +63,8 @@ async fn overview(
 
 // ---- Branches -------------------------------------------------------------
 
-#[derive(Serialize)]
-struct BranchDto {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct BranchDto {
     id: Uuid,
     name: String,
     code: String,
@@ -74,19 +82,26 @@ impl From<Branch> for BranchDto {
     }
 }
 
-#[derive(Deserialize)]
-struct CreateBranch {
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct CreateBranch {
     name: String,
     code: String,
 }
 
-#[derive(Deserialize)]
-struct UpdateBranch {
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct UpdateBranch {
     name: Option<String>,
     code: Option<String>,
 }
 
-async fn list_branches(
+#[utoipa::path(
+    get,
+    path = "/api/v1/branches",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    responses((status = 200, description = "All branches in the tenant", body = Vec<BranchDto>)),
+)]
+pub(crate) async fn list_branches(
     State(state): State<AppState>,
     RequireAdmin(user): RequireAdmin,
 ) -> AppResult<Json<Vec<BranchDto>>> {
@@ -94,7 +109,19 @@ async fn list_branches(
     Ok(Json(rows.into_iter().map(BranchDto::from).collect()))
 }
 
-async fn create_branch(
+#[utoipa::path(
+    post,
+    path = "/api/v1/branches",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    request_body = CreateBranch,
+    responses(
+        (status = 201, description = "Branch created", body = BranchDto),
+        (status = 409, description = "Branch code already exists"),
+        (status = 422, description = "Name and code required"),
+    ),
+)]
+pub(crate) async fn create_branch(
     State(state): State<AppState>,
     RequireAdmin(user): RequireAdmin,
     Json(req): Json<CreateBranch>,
@@ -112,7 +139,20 @@ async fn create_branch(
     Ok((StatusCode::CREATED, Json(branch.into())))
 }
 
-async fn update_branch(
+#[utoipa::path(
+    patch,
+    path = "/api/v1/branches/{id}",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(("id" = Uuid, Path, description = "Branch id")),
+    request_body = UpdateBranch,
+    responses(
+        (status = 200, description = "Branch updated", body = BranchDto),
+        (status = 404, description = "Branch not found"),
+        (status = 409, description = "Branch code already exists"),
+    ),
+)]
+pub(crate) async fn update_branch(
     State(state): State<AppState>,
     RequireAdmin(user): RequireAdmin,
     Path(id): Path<Uuid>,
@@ -133,8 +173,8 @@ async fn update_branch(
 
 // ---- Products -------------------------------------------------------------
 
-#[derive(Serialize)]
-struct ProductDto {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct ProductDto {
     id: Uuid,
     code: String,
     name: String,
@@ -154,19 +194,26 @@ impl From<Product> for ProductDto {
     }
 }
 
-#[derive(Deserialize)]
-struct CreateProduct {
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct CreateProduct {
     code: String,
     name: String,
 }
 
-#[derive(Deserialize)]
-struct UpdateProduct {
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct UpdateProduct {
     name: Option<String>,
     is_active: Option<bool>,
 }
 
-async fn list_products(
+#[utoipa::path(
+    get,
+    path = "/api/v1/products",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    responses((status = 200, description = "All products in the tenant", body = Vec<ProductDto>)),
+)]
+pub(crate) async fn list_products(
     State(state): State<AppState>,
     RequireAdmin(user): RequireAdmin,
 ) -> AppResult<Json<Vec<ProductDto>>> {
@@ -174,7 +221,19 @@ async fn list_products(
     Ok(Json(rows.into_iter().map(ProductDto::from).collect()))
 }
 
-async fn create_product(
+#[utoipa::path(
+    post,
+    path = "/api/v1/products",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    request_body = CreateProduct,
+    responses(
+        (status = 201, description = "Product created", body = ProductDto),
+        (status = 409, description = "Product code already exists"),
+        (status = 422, description = "Code and name required"),
+    ),
+)]
+pub(crate) async fn create_product(
     State(state): State<AppState>,
     RequireAdmin(user): RequireAdmin,
     Json(req): Json<CreateProduct>,
@@ -192,7 +251,19 @@ async fn create_product(
     Ok((StatusCode::CREATED, Json(product.into())))
 }
 
-async fn update_product(
+#[utoipa::path(
+    patch,
+    path = "/api/v1/products/{id}",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(("id" = Uuid, Path, description = "Product id")),
+    request_body = UpdateProduct,
+    responses(
+        (status = 200, description = "Product updated", body = ProductDto),
+        (status = 404, description = "Product not found"),
+    ),
+)]
+pub(crate) async fn update_product(
     State(state): State<AppState>,
     RequireAdmin(user): RequireAdmin,
     Path(id): Path<Uuid>,
@@ -212,13 +283,14 @@ async fn update_product(
 
 // ---- Users ----------------------------------------------------------------
 
-#[derive(Serialize)]
-struct UserDto {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct UserDto {
     id: Uuid,
     branch_id: Option<Uuid>,
     full_name: String,
     phone: String,
     email: String,
+    #[schema(value_type = String)]
     role: Role,
     is_active: bool,
     created_at: DateTime<Utc>,
@@ -239,23 +311,31 @@ impl From<User> for UserDto {
     }
 }
 
-#[derive(Deserialize)]
-struct CreateUser {
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct CreateUser {
     branch_id: Option<Uuid>,
     full_name: String,
     phone: String,
     email: String,
     password: String,
+    #[schema(value_type = String)]
     role: Role,
 }
 
-#[derive(Deserialize)]
-struct UpdateUser {
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct UpdateUser {
     branch_id: Option<Uuid>,
     is_active: Option<bool>,
 }
 
-async fn list_users(
+#[utoipa::path(
+    get,
+    path = "/api/v1/users",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    responses((status = 200, description = "All users in the tenant", body = Vec<UserDto>)),
+)]
+pub(crate) async fn list_users(
     State(state): State<AppState>,
     RequireAdmin(user): RequireAdmin,
 ) -> AppResult<Json<Vec<UserDto>>> {
@@ -263,7 +343,19 @@ async fn list_users(
     Ok(Json(rows.into_iter().map(UserDto::from).collect()))
 }
 
-async fn create_user(
+#[utoipa::path(
+    post,
+    path = "/api/v1/users",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    request_body = CreateUser,
+    responses(
+        (status = 201, description = "User created", body = UserDto),
+        (status = 409, description = "Email already exists"),
+        (status = 422, description = "Invalid name, password, branch, or phone"),
+    ),
+)]
+pub(crate) async fn create_user(
     State(state): State<AppState>,
     RequireAdmin(user): RequireAdmin,
     Json(req): Json<CreateUser>,
@@ -306,7 +398,19 @@ async fn create_user(
     Ok((StatusCode::CREATED, Json(created.into())))
 }
 
-async fn update_user(
+#[utoipa::path(
+    patch,
+    path = "/api/v1/users/{id}",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(("id" = Uuid, Path, description = "User id")),
+    request_body = UpdateUser,
+    responses(
+        (status = 200, description = "User updated", body = UserDto),
+        (status = 404, description = "User not found"),
+    ),
+)]
+pub(crate) async fn update_user(
     State(state): State<AppState>,
     RequireAdmin(user): RequireAdmin,
     Path(id): Path<Uuid>,

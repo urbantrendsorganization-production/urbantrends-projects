@@ -9,6 +9,7 @@ use onboardkit_core::jobs::{SendSmsPayload, job_type};
 use onboardkit_core::{Actor, Role, TransitionAction, apply_transition};
 use onboardkit_db::{clients, events, jobs};
 use serde::Deserialize;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::auth::RequireReviewer;
@@ -17,17 +18,17 @@ use crate::routes::dto::{ApplicationResponse, application_dto};
 use crate::routes::guard::{load_application, map_transition_err};
 use crate::state::AppState;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-enum ReviewAction {
+pub(crate) enum ReviewAction {
     StartReview,
     Approve,
     Reject,
     Return,
 }
 
-#[derive(Deserialize)]
-struct ReviewRequest {
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct ReviewRequest {
     action: ReviewAction,
     #[serde(default)]
     reason: Option<String>,
@@ -37,8 +38,22 @@ struct ReviewRequest {
 
 /// `POST /applications/:id/review` — perform a reviewer transition (§6). The
 /// reviewer may only act on applications within their own branch.
+#[utoipa::path(
+    post,
+    path = "/api/v1/applications/{id}/review",
+    tag = "review",
+    security(("bearer_auth" = [])),
+    params(("id" = Uuid, Path, description = "Application id")),
+    request_body = ReviewRequest,
+    responses(
+        (status = 200, description = "Transition applied", body = ApplicationResponse),
+        (status = 404, description = "Not in reviewer's branch, or not found"),
+        (status = 409, description = "Transition not valid from the current state"),
+        (status = 422, description = "Missing reason (reject) or notes (return)"),
+    ),
+)]
 #[tracing::instrument(skip_all)]
-async fn review(
+pub(crate) async fn review(
     State(state): State<AppState>,
     RequireReviewer(user): RequireReviewer,
     Path(id): Path<Uuid>,

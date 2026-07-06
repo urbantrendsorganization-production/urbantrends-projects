@@ -14,13 +14,14 @@ use onboardkit_db::clients::ClientPatch;
 use onboardkit_db::{applications, clients, documents, events};
 use onboardkit_integrations::Phone;
 use serde::Deserialize;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, RequireAgent};
 use crate::error::{AppError, AppResult};
 use crate::routes::dto::{
-    ApplicationDetailResponse, ApplicationResponse, Meta, Paginated, application_dto, client_dto,
-    document_dto, event_dto,
+    ApplicationDetailResponse, ApplicationResponse, Meta, Paginated, PaginatedApplications,
+    application_dto, client_dto, document_dto, event_dto,
 };
 use crate::routes::guard::{
     REQUIRED_DOC_TYPES, load_application, load_owned, load_owned_editable, map_transition_err,
@@ -32,15 +33,27 @@ const GET_URL_TTL: Duration = Duration::from_secs(300);
 
 // ---- Create ---------------------------------------------------------------
 
-#[derive(Deserialize)]
-struct CreateApplicationRequest {
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct CreateApplicationRequest {
     client_id: Uuid,
     product_code: String,
 }
 
 /// `POST /applications` (agent) — open a draft for one of the agent's clients.
+#[utoipa::path(
+    post,
+    path = "/api/v1/applications",
+    tag = "applications",
+    security(("bearer_auth" = [])),
+    request_body = CreateApplicationRequest,
+    responses(
+        (status = 201, description = "Draft application created", body = ApplicationResponse),
+        (status = 404, description = "Client not found in tenant"),
+        (status = 422, description = "Missing branch or product"),
+    ),
+)]
 #[tracing::instrument(skip_all)]
-async fn create(
+pub(crate) async fn create(
     State(state): State<AppState>,
     RequireAgent(user): RequireAgent,
     Json(req): Json<CreateApplicationRequest>,
@@ -80,22 +93,36 @@ async fn create(
 
 // ---- Progressive save -----------------------------------------------------
 
-#[derive(Deserialize)]
-struct PatchApplicationRequest {
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct PatchApplicationRequest {
     full_name: Option<String>,
     phone: Option<String>,
     national_id_number: Option<String>,
     kra_pin: Option<String>,
     date_of_birth: Option<NaiveDate>,
     address: Option<String>,
+    #[schema(value_type = Option<Object>)]
     next_of_kin: Option<serde_json::Value>,
 }
 
 /// `PATCH /applications/:id` (agent owner, Draft/Returned only) — save one
 /// section of the client's details. A dropped connection never loses prior work
 /// because each section is persisted independently (§12).
+#[utoipa::path(
+    patch,
+    path = "/api/v1/applications/{id}",
+    tag = "applications",
+    security(("bearer_auth" = [])),
+    params(("id" = Uuid, Path, description = "Application id")),
+    request_body = PatchApplicationRequest,
+    responses(
+        (status = 200, description = "Section saved; full detail returned", body = ApplicationDetailResponse),
+        (status = 409, description = "Application no longer editable"),
+        (status = 422, description = "Invalid phone or field"),
+    ),
+)]
 #[tracing::instrument(skip_all)]
-async fn patch_application(
+pub(crate) async fn patch_application(
     State(state): State<AppState>,
     RequireAgent(user): RequireAgent,
     Path(id): Path<Uuid>,
@@ -145,8 +172,20 @@ async fn patch_application(
 
 /// `POST /applications/:id/submit` (agent owner) — validate completeness and
 /// transition Draft/Returned -> Submitted (§6).
+#[utoipa::path(
+    post,
+    path = "/api/v1/applications/{id}/submit",
+    tag = "applications",
+    security(("bearer_auth" = [])),
+    params(("id" = Uuid, Path, description = "Application id")),
+    responses(
+        (status = 200, description = "Application submitted", body = ApplicationResponse),
+        (status = 409, description = "Not in a submittable state"),
+        (status = 422, description = "Completeness check failed"),
+    ),
+)]
 #[tracing::instrument(skip_all)]
-async fn submit(
+pub(crate) async fn submit(
     State(state): State<AppState>,
     RequireAgent(user): RequireAgent,
     Path(id): Path<Uuid>,
@@ -194,7 +233,7 @@ async fn submit(
 // ---- Queue + detail -------------------------------------------------------
 
 #[derive(Deserialize)]
-struct ListQuery {
+pub(crate) struct ListQuery {
     page: Option<i64>,
     per_page: Option<i64>,
     status: Option<StatusKind>,
@@ -205,8 +244,22 @@ struct ListQuery {
 /// `GET /applications` — the role-scoped queue (§7). Agents see their own
 /// applications; reviewers see non-draft applications in their branch; admins
 /// see the whole tenant.
+#[utoipa::path(
+    get,
+    path = "/api/v1/applications",
+    tag = "applications",
+    security(("bearer_auth" = [])),
+    params(
+        ("page" = Option<i64>, Query, description = "1-based page (default 1)"),
+        ("per_page" = Option<i64>, Query, description = "Page size, max 100 (default 20)"),
+        ("status" = Option<String>, Query, description = "Filter by status"),
+        ("branch_id" = Option<Uuid>, Query, description = "Admin-only branch filter"),
+        ("agent_id" = Option<Uuid>, Query, description = "Admin-only agent filter"),
+    ),
+    responses((status = 200, description = "Role-scoped, paginated queue", body = PaginatedApplications)),
+)]
 #[tracing::instrument(skip_all)]
-async fn list(
+pub(crate) async fn list(
     State(state): State<AppState>,
     user: AuthUser,
     Query(q): Query<ListQuery>,
@@ -247,8 +300,19 @@ async fn list(
 
 /// `GET /applications/:id` — full detail with short-lived presigned document
 /// URLs (§7, §11).
+#[utoipa::path(
+    get,
+    path = "/api/v1/applications/{id}",
+    tag = "applications",
+    security(("bearer_auth" = [])),
+    params(("id" = Uuid, Path, description = "Application id")),
+    responses(
+        (status = 200, description = "Full application detail", body = ApplicationDetailResponse),
+        (status = 404, description = "Not visible to the caller, or not found"),
+    ),
+)]
 #[tracing::instrument(skip_all)]
-async fn get_detail(
+pub(crate) async fn get_detail(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<Uuid>,

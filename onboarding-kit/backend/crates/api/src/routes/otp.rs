@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use onboardkit_db::{applications, clients};
 use onboardkit_integrations::otp::{OtpError, OtpPurpose};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::auth::RequireAgent;
@@ -41,8 +42,8 @@ async fn client_phone(state: &AppState, tenant_id: Uuid, client_id: Uuid) -> App
         .ok_or_else(|| AppError::Validation("The client has no phone number yet.".to_owned()))
 }
 
-#[derive(Serialize)]
-struct SendResponse {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct SendResponse {
     expires_at: DateTime<Utc>,
     /// Present only in dev when `DEV_EXPOSE_OTP=true` (§8). Never in production.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -50,8 +51,20 @@ struct SendResponse {
 }
 
 /// `POST /applications/:id/otp/send` — issue an OTP to the client's phone.
+#[utoipa::path(
+    post,
+    path = "/api/v1/applications/{id}/otp/send",
+    tag = "otp",
+    security(("bearer_auth" = [])),
+    params(("id" = Uuid, Path, description = "Application id")),
+    responses(
+        (status = 200, description = "OTP issued to the client's phone", body = SendResponse),
+        (status = 422, description = "Client has no phone number"),
+        (status = 429, description = "Too many OTP sends"),
+    ),
+)]
 #[tracing::instrument(skip_all)]
-async fn send(
+pub(crate) async fn send(
     State(state): State<AppState>,
     RequireAgent(user): RequireAgent,
     Path(id): Path<Uuid>,
@@ -73,15 +86,28 @@ async fn send(
     }))
 }
 
-#[derive(Deserialize)]
-struct VerifyRequest {
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct VerifyRequest {
     code: String,
 }
 
 /// `POST /applications/:id/otp/verify` — verify the code and stamp
 /// `otp_verified_at` on success.
+#[utoipa::path(
+    post,
+    path = "/api/v1/applications/{id}/otp/verify",
+    tag = "otp",
+    security(("bearer_auth" = [])),
+    params(("id" = Uuid, Path, description = "Application id")),
+    request_body = VerifyRequest,
+    responses(
+        (status = 204, description = "Code verified; phone marked verified"),
+        (status = 400, description = "Invalid or expired code"),
+        (status = 429, description = "Too many attempts"),
+    ),
+)]
 #[tracing::instrument(skip_all)]
-async fn verify(
+pub(crate) async fn verify(
     State(state): State<AppState>,
     RequireAgent(user): RequireAgent,
     Path(id): Path<Uuid>,

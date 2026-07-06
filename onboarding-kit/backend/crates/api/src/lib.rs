@@ -16,6 +16,7 @@
 pub mod auth;
 pub mod config;
 pub mod error;
+pub mod openapi;
 pub mod otp_store;
 pub mod routes;
 pub mod state;
@@ -64,6 +65,7 @@ pub fn build_router(state: AppState) -> Router {
     }
 
     let api_v1 = Router::new()
+        .route("/openapi.json", axum::routing::get(openapi::openapi_json))
         .merge(routes::health::router())
         .merge(routes::session::router())
         .merge(routes::admin::router())

@@ -8,6 +8,7 @@ use axum::{Json, Router};
 use chrono::Utc;
 use onboardkit_db::applications;
 use serde::Deserialize;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::auth::RequireAgent;
@@ -15,16 +16,28 @@ use crate::error::{AppError, AppResult};
 use crate::routes::guard::load_owned_editable;
 use crate::state::AppState;
 
-#[derive(Deserialize)]
-struct ConsentRequest {
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct ConsentRequest {
     terms_version: String,
     accepted: bool,
 }
 
 /// `POST /applications/:id/consent` (agent owner) — stamp `consent_at` and the
 /// accepted terms version.
+#[utoipa::path(
+    post,
+    path = "/api/v1/applications/{id}/consent",
+    tag = "applications",
+    security(("bearer_auth" = [])),
+    params(("id" = Uuid, Path, description = "Application id")),
+    request_body = ConsentRequest,
+    responses(
+        (status = 204, description = "Consent recorded"),
+        (status = 422, description = "Consent not accepted or terms out of date"),
+    ),
+)]
 #[tracing::instrument(skip_all)]
-async fn consent(
+pub(crate) async fn consent(
     State(state): State<AppState>,
     RequireAgent(user): RequireAgent,
     Path(id): Path<Uuid>,

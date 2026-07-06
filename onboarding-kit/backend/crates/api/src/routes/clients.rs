@@ -6,21 +6,33 @@ use axum::{Json, Router};
 
 use onboardkit_db::clients;
 use serde::Deserialize;
+use utoipa::ToSchema;
 
 use crate::auth::RequireAgent;
 use crate::error::{AppError, AppResult};
 use crate::routes::dto::{ClientResponse, client_dto};
 use crate::state::AppState;
 
-#[derive(Deserialize)]
-struct CreateClientRequest {
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct CreateClientRequest {
     full_name: String,
 }
 
 /// `POST /clients` (agent) — create a client with just a name; details are
 /// filled in progressively during the draft.
+#[utoipa::path(
+    post,
+    path = "/api/v1/clients",
+    tag = "clients",
+    security(("bearer_auth" = [])),
+    request_body = CreateClientRequest,
+    responses(
+        (status = 201, description = "Client shell created", body = ClientResponse),
+        (status = 422, description = "Validation failed"),
+    ),
+)]
 #[tracing::instrument(skip_all)]
-async fn create(
+pub(crate) async fn create(
     State(state): State<AppState>,
     RequireAgent(user): RequireAgent,
     Json(req): Json<CreateClientRequest>,

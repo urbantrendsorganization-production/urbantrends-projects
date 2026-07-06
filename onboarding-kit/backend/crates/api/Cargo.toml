@@ -40,6 +40,7 @@ anyhow.workspace = true
 async-trait.workspace = true
 csv.workspace = true
 rust_xlsxwriter.workspace = true
+utoipa.workspace = true
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

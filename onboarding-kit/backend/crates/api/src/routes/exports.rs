@@ -19,12 +19,23 @@ use crate::state::AppState;
 // stays here (the worker archives CSV only).
 
 #[derive(Deserialize)]
-struct ExportQuery {
+pub(crate) struct ExportQuery {
     format: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/exports/approved-clients",
+    tag = "exports",
+    security(("bearer_auth" = [])),
+    params(("format" = Option<String>, Query, description = "csv (default) or xlsx")),
+    responses(
+        (status = 200, description = "Approved-clients export (CSV or XLSX attachment)", content_type = "text/csv"),
+        (status = 422, description = "Unsupported format"),
+    ),
+)]
 #[tracing::instrument(skip_all)]
-async fn approved_clients(
+pub(crate) async fn approved_clients(
     State(state): State<AppState>,
     RequireAdmin(user): RequireAdmin,
     Query(q): Query<ExportQuery>,

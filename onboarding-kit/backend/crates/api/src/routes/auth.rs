@@ -16,6 +16,7 @@ use onboardkit_core::Role;
 use onboardkit_db::{refresh_tokens, users};
 use onboardkit_integrations::{password, token};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::auth::issue_access_token;
@@ -27,29 +28,31 @@ use crate::state::AppState;
 static DUMMY_HASH: LazyLock<String> =
     LazyLock::new(|| password::hash("timing-equalizer-not-a-real-secret").unwrap_or_default());
 
-#[derive(Deserialize)]
-struct LoginRequest {
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct LoginRequest {
     email: String,
     password: String,
 }
 
-#[derive(Deserialize)]
-struct RefreshRequest {
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct RefreshRequest {
     refresh_token: String,
 }
 
-#[derive(Deserialize)]
-struct LogoutRequest {
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct LogoutRequest {
     refresh_token: String,
 }
 
-#[derive(Serialize)]
-struct TokenResponse {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct TokenResponse {
     access_token: String,
     refresh_token: String,
+    #[schema(value_type = String)]
     token_type: &'static str,
     /// Access-token lifetime in seconds.
     expires_in: i64,
+    #[schema(value_type = String)]
     role: Role,
     user_id: Uuid,
     tenant_id: Uuid,
@@ -84,8 +87,18 @@ async fn issue_tokens(
 }
 
 /// `POST /auth/login`
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/login",
+    tag = "auth",
+    request_body = LoginRequest,
+    responses(
+        (status = 200, description = "Authenticated; access + refresh tokens issued", body = TokenResponse),
+        (status = 401, description = "Invalid credentials"),
+    ),
+)]
 #[tracing::instrument(skip_all)]
-async fn login(
+pub(crate) async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> AppResult<Json<TokenResponse>> {
@@ -106,8 +119,18 @@ async fn login(
 }
 
 /// `POST /auth/refresh` — rotate the refresh token and mint a new access token.
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/refresh",
+    tag = "auth",
+    request_body = RefreshRequest,
+    responses(
+        (status = 200, description = "Rotated; new token pair issued", body = TokenResponse),
+        (status = 401, description = "Refresh token invalid, expired, or reused"),
+    ),
+)]
 #[tracing::instrument(skip_all)]
-async fn refresh(
+pub(crate) async fn refresh(
     State(state): State<AppState>,
     Json(req): Json<RefreshRequest>,
 ) -> AppResult<Json<TokenResponse>> {
@@ -162,8 +185,15 @@ async fn refresh(
 }
 
 /// `POST /auth/logout` — revoke the presented refresh token. Idempotent.
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/logout",
+    tag = "auth",
+    request_body = LogoutRequest,
+    responses((status = 204, description = "Refresh token revoked (idempotent)")),
+)]
 #[tracing::instrument(skip_all)]
-async fn logout(
+pub(crate) async fn logout(
     State(state): State<AppState>,
     Json(req): Json<LogoutRequest>,
 ) -> AppResult<StatusCode> {

@@ -4,7 +4,7 @@ Working checklist for Claude Code sessions. Read CLAUDE.md first — it is the s
 
 Phases are a dependency sequence, not a schedule. Move to the next phase the moment the "Done when" gate passes — no waiting, no padding. Ship as fast as the gates allow.
 
-**Current phase:** Backend complete through Phase 5 (schema/auth/state-machine, onboarding flow, review + real SMS providers, admin/reports/export, nightly digest, rate limiting). Office UI complete through Phase 4. Deploy infra (Dockerfile/CI-GHCR/prod-compose/Caddy/backup/alerting runbook) + full demo seed done. Phase 6 docs done. **Remaining:** OpenAPI/utoipa spec + generated clients; Flutter agent stepper (Dart written, needs a Flutter build machine); signed demo APK (blocked on toolchain); one live SMS-provider smoke test.
+**Current phase:** Backend complete through Phase 5 (schema/auth/state-machine, onboarding flow, review + real SMS providers, admin/reports/export, nightly digest, rate limiting). Office UI complete through Phase 4. Deploy infra (Dockerfile/CI-GHCR/prod-compose/Caddy/backup/alerting runbook) + full demo seed done. Phase 6 docs done. **Remaining (all environment-blocked here):** generate the TS/Dart clients from the now-served OpenAPI spec (needs Node/Java toolchain); build the Flutter agent stepper (Dart written, needs a Flutter machine); signed demo APK (blocked on that toolchain); actually run the prod deploy on the Hetzner box; one live SMS-provider smoke test (needs real gateway creds). The OpenAPI/utoipa spec itself is now done.
 **Last session note:** 2026-07-06 — Finished the backend/deploy/demo surface end-to-end. **Full demo seed** (`onboardkit-db` seed): 3 branches, 3 products, 6 users, **40 applications across every status** with consistent event history (120 events), KYC document rows (148), and client numbers `JM-00001…JM-00012` on approved — idempotent via deterministic v5 UUIDs. This populates the reviewer queue so staff can work. **Real SMS providers** (§9): `AfricasTalkingProvider` (primary) + `InfobipProvider` (fallback) + `FallbackProvider`, selected by `provider_from_env` (`SMS_DRY_RUN`, default mock); the succeeding provider is recorded on the job row (migration 0006 adds `jobs.provider` + `provider_message_id`; `db::jobs::set_provider`). **Deploy (Phase 5):** GHCR push on main added to CI `docker` job; `ops/docker-compose.prod.yml` (GHCR image, Caddy, no MinIO), `ops/Caddyfile`, `ops/backup.sh`, `ops/DEPLOY.md` (deploy + alerting runbook); `SMS_DRY_RUN` + reconciled SMS vars in `.env.example`. **jobs** backoff unit test added. **Phase 6 docs** in `docs/demo/` (walkthrough, pilot proposal, landing copy). **84 backend tests green**, clippy `-D warnings`, fmt, `sqlx prepare --workspace --check` all clean. NOT done: OpenAPI/utoipa; Flutter stepper build (Dart source written this session, uncompiled — no Flutter here); signed APK.
 --- earlier note ---
 2026-07-05 — Stabilised the tree to green (fixed a
@@ -101,7 +101,7 @@ Backend:
 - [x] OTP send/verify endpoints (client's phone, stamps `otp_verified_at`)
 - [x] Consent endpoint (terms_version + timestamp)
 - [x] Submit endpoint: completeness validation (4 docs processed, OTP verified, consent recorded) → Draft→Submitted event
-- [ ] OpenAPI spec via utoipa served in dev; Dart + TS clients generated
+- [x] OpenAPI spec via utoipa served at `/api/v1/openapi.json` (all 29 handlers annotated, all DTOs `ToSchema`, bearer_auth security scheme, `ApiDoc` in `openapi.rs`, unit test asserts coverage). **Client generation** (`openapi-typescript` / `openapi-generator` dart-dio) still needs a run on a Node/Java toolchain to replace the hand-written types.
 
 Flutter agent app:
 - [ ] Login + my-applications list (drafts / returned / submitted / terminal)
@@ -300,3 +300,17 @@ Record any decision not covered by CLAUDE.md here (date, decision, why). Keep CL
   **NOT wired yet:** the `extract_document` job, a column to persist suggestions,
   the API endpoint, and the reviewer/agent UI to show + accept them are the
   follow-up; this session lands the `integrations` extractor + 6 unit tests only.
+- 2026-07-07 — **OpenAPI/utoipa spec served at `/api/v1/openapi.json` (§7).**
+  All 29 route handlers carry `#[utoipa::path]`; every request/response DTO
+  derives `ToSchema` (core enums `Role`/`StatusKind` mapped via
+  `#[schema(value_type = String)]` so `core` stays free of a utoipa dependency;
+  `serde_json::Value` → `value_type = Object`). Central `ApiDoc` (`openapi.rs`)
+  aggregates paths + component schemas + a `bearer_auth` JWT security scheme via
+  a `Modify` addon; a unit test asserts key paths/schemas/scheme are present.
+  The generic `Paginated<T>` isn't OpenAPI-nameable, so a concrete
+  `PaginatedApplications` DTO documents the queue response (same wire shape).
+  Spec is served unconditionally (it's the public contract, not sensitive).
+  **Client generation is the remaining half of §7** — running
+  `openapi-typescript` (office) and `openapi-generator` dart-dio (agent) to
+  replace the hand-written `onboardkit.ts` / `models.dart` types needs a
+  Node/Java toolchain not present in this env.
