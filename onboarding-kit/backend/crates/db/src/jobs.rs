@@ -86,6 +86,28 @@ pub async fn mark_done(exec: impl PgExecutor<'_>, id: Uuid) -> Result<(), sqlx::
     Ok(())
 }
 
+/// Record which SMS provider delivered a job (§9). Sets only the provider
+/// columns; the caller still marks the job `done` via [`mark_done`].
+///
+/// # Errors
+/// Returns [`sqlx::Error`] on failure.
+pub async fn set_provider(
+    exec: impl PgExecutor<'_>,
+    id: Uuid,
+    provider: &str,
+    message_id: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        r#"UPDATE jobs SET provider = $2, provider_message_id = $3 WHERE id = $1"#,
+        id,
+        provider,
+        message_id,
+    )
+    .execute(exec)
+    .await?;
+    Ok(())
+}
+
 /// Record a failed attempt. If attempts remain, requeue at `retry_at`
 /// (backoff); otherwise mark `failed`.
 ///

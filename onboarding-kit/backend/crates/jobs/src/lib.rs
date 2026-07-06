@@ -15,7 +15,7 @@ use onboardkit_core::jobs::{
     NightlyExportDigestPayload, ProcessImagePayload, SendSmsPayload, job_type,
 };
 use onboardkit_db::jobs::{self, Job};
-use onboardkit_integrations::sms::{MockProvider, SmsProvider};
+use onboardkit_integrations::sms::SmsProvider;
 use onboardkit_integrations::{ObjectStore, Phone, image_ops, storage};
 use sqlx::postgres::PgPool;
 use tokio::signal;
@@ -85,12 +85,12 @@ pub async fn run(pool: PgPool, storage: ObjectStore, config: WorkerConfig) -> an
         "worker started"
     );
 
-    // SMS provider: MockProvider in dev/demo. Production wires the
-    // AfricasTalking → Infobip FallbackProvider here (§9).
+    // SMS provider (§9): MockProvider in dev/demo, or the AfricasTalking →
+    // Infobip FallbackProvider when `SMS_PROVIDER=live` with credentials set.
     let ctx = Ctx {
         pool: pool.clone(),
         storage: Arc::new(storage),
-        sms: Arc::new(MockProvider),
+        sms: onboardkit_integrations::sms::provider_from_env(),
     };
 
     let mut ticker = tokio::time::interval(config.poll_interval);
@@ -226,6 +226,14 @@ async fn send_sms(ctx: &Ctx, job: &Job) -> Result<(), JobError> {
         .send(&phone, &payload.message)
         .await
         .map_err(|e| JobError::Sms(e.to_string()))?;
+    // Record which provider delivered on the job row (§9).
+    jobs::set_provider(
+        &ctx.pool,
+        job.id,
+        receipt.provider,
+        receipt.message_id.as_deref(),
+    )
+    .await?;
     tracing::info!(provider = receipt.provider, "sms sent");
     Ok(())
 }
@@ -343,5 +351,25 @@ async fn shutdown_signal() {
     tokio::select! {
         () = ctrl_c => {},
         () = terminate => {},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_BACKOFF_SECS, backoff_secs};
+
+    #[test]
+    fn backoff_grows_then_caps() {
+        // Exponential (2^attempts), non-decreasing, capped at MAX_BACKOFF_SECS.
+        let mut prev = 0;
+        for attempts in 1..20 {
+            let b = backoff_secs(attempts);
+            assert!(b >= prev, "backoff must not shrink");
+            assert!(b <= MAX_BACKOFF_SECS, "backoff must stay capped");
+            prev = b;
+        }
+        assert_eq!(backoff_secs(1), 2);
+        assert_eq!(backoff_secs(2), 4);
+        assert_eq!(backoff_secs(19), MAX_BACKOFF_SECS);
     }
 }
