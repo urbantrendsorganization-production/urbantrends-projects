@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO products (id, tenant_id, code, name, is_active)\n               VALUES ($1, $2, $3, $4, TRUE)\n               ON CONFLICT (tenant_id, code) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e15f07cb7d69bc8af268b95403a807f2683a285ab3cb81473b71171814ef70ec"
+}
