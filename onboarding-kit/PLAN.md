@@ -4,8 +4,10 @@ Working checklist for Claude Code sessions. Read CLAUDE.md first — it is the s
 
 Phases are a dependency sequence, not a schedule. Move to the next phase the moment the "Done when" gate passes — no waiting, no padding. Ship as fast as the gates allow.
 
-**Current phase:** Phase 2/3/4 backend complete + core loop proven; office UI complete through Phase 4 (queue/detail/review actions, admin CRUD, reports+charts, exports). Remaining: `nightly_export_digest` cron, Flutter stepper, Phase 5 hardening/deploy.
-**Last session note:** 2026-07-05 — Stabilised the tree to green (fixed a
+**Current phase:** Backend complete through Phase 5 (schema/auth/state-machine, onboarding flow, review + real SMS providers, admin/reports/export, nightly digest, rate limiting). Office UI complete through Phase 4. Deploy infra (Dockerfile/CI-GHCR/prod-compose/Caddy/backup/alerting runbook) + full demo seed done. Phase 6 docs done. **Remaining:** OpenAPI/utoipa spec + generated clients; Flutter agent stepper (Dart written, needs a Flutter build machine); signed demo APK (blocked on toolchain); one live SMS-provider smoke test.
+**Last session note:** 2026-07-06 — Finished the backend/deploy/demo surface end-to-end. **Full demo seed** (`onboardkit-db` seed): 3 branches, 3 products, 6 users, **40 applications across every status** with consistent event history (120 events), KYC document rows (148), and client numbers `JM-00001…JM-00012` on approved — idempotent via deterministic v5 UUIDs. This populates the reviewer queue so staff can work. **Real SMS providers** (§9): `AfricasTalkingProvider` (primary) + `InfobipProvider` (fallback) + `FallbackProvider`, selected by `provider_from_env` (`SMS_DRY_RUN`, default mock); the succeeding provider is recorded on the job row (migration 0006 adds `jobs.provider` + `provider_message_id`; `db::jobs::set_provider`). **Deploy (Phase 5):** GHCR push on main added to CI `docker` job; `ops/docker-compose.prod.yml` (GHCR image, Caddy, no MinIO), `ops/Caddyfile`, `ops/backup.sh`, `ops/DEPLOY.md` (deploy + alerting runbook); `SMS_DRY_RUN` + reconciled SMS vars in `.env.example`. **jobs** backoff unit test added. **Phase 6 docs** in `docs/demo/` (walkthrough, pilot proposal, landing copy). **84 backend tests green**, clippy `-D warnings`, fmt, `sqlx prepare --workspace --check` all clean. NOT done: OpenAPI/utoipa; Flutter stepper build (Dart source written this session, uncompiled — no Flutter here); signed APK.
+--- earlier note ---
+2026-07-05 — Stabilised the tree to green (fixed a
 boot-blocking S3 sleep_impl panic, 3 clippy errors, stale tests; regenerated
 `.sqlx`) and committed Phase 1 + the Phase 2 substrate. Wired the **Phase 2
 backend** (clients/applications CRUD, PATCH progressive save, presign/confirm
@@ -118,8 +120,8 @@ Backend:
 - [x] `GET /applications/:id` detail with short-expiry presigned GET URLs (≤5 min)
 - [x] `POST /applications/:id/review` — start_review / approve / reject / return per state machine (reviewer branch-scoped)
 - [x] Client number generation on approval (tenant-scoped, tenant-row-locked; prefix from tenant initials, e.g. `JM-00001`)
-- [~] `SmsProvider` trait + MockProvider done; AfricasTalking + Infobip + FallbackProvider NOT yet implemented (§9)
-- [~] `send_sms` job wired to approval/rejection/return events; provider-used-on-job-row NOT recorded yet
+- [x] `SmsProvider` trait + MockProvider + AfricasTalking (primary) + Infobip (fallback) + FallbackProvider (§9); selected via `provider_from_env` (`SMS_DRY_RUN`)
+- [x] `send_sms` job wired to approval/rejection/return events; provider-used recorded on job row (`jobs.provider` / `provider_message_id`, migration 0006)
 
 Office app:
 - [x] Review queue table (status filters, badges, per_page=100; authed proxy)
@@ -148,12 +150,12 @@ Office app:
 - [~] Full CLAUDE.md §13 security checklist pass (rate limiting + PII log audit done; remaining items already enforced in P1–P4 — verify-and-tick sweep still TODO)
 - [x] Rate limiting via tower-governor on `/auth/*` and `/otp/*` (IP-keyed SmartIpKeyExtractor; config-gated via `RATE_LIMIT_*`; server serves with `ConnectInfo`; 2 integration tests: same-IP throttle + per-IP isolation)
 - [x] PII log audit (grep tracing calls for phone/pin/otp/token) — clean: phones logged via `.masked()` (last-3), all else IDs only, every `#[instrument]` uses `skip`
-- [ ] Multi-stage Dockerfile (cargo-chef → debian-slim), one image, `api` + `jobs` services
-- [ ] GH Actions: build + push to GHCR on main
-- [ ] Prod compose at `/srv/urbantrends/onboardkit/`, Caddy vhost `onboardkit.urbantrends.dev`
-- [ ] Postgres backup cron into `/srv/urbantrends/backups` pattern
-- [ ] Seed script: "Jubilant Microfinance" demo tenant per §15, idempotent
-- [ ] Basic alerting on api/jobs errors
+- [x] Multi-stage Dockerfile (cargo-chef → debian-slim/trixie), one image, `api` + `jobs` services
+- [x] GH Actions: build + push to GHCR on main (`docker` job pushes `backend:latest` + `sha-…` on default branch)
+- [x] Prod compose (`ops/docker-compose.prod.yml`, GHCR image, Caddy vhost `onboardkit.urbantrends.dev`, `ops/Caddyfile`, `ops/DEPLOY.md`)
+- [x] Postgres backup cron (`ops/backup.sh` → `/srv/urbantrends/backups`, gzip + retention)
+- [x] Seed script: "Jubilant Microfinance" per §15 — 3 branches, 3 products, 6 users, 40 applications across every status with event history + KYC doc rows + client numbers; idempotent
+- [x] Basic alerting on api/jobs errors (baseline runbook in `ops/DEPLOY.md`: health check, error-log + failed-jobs + backup alerts)
 
 **Done when:** production URL serves the seeded demo; a fresh clone can `docker compose up` locally with `.env.example` guidance alone.
 
@@ -161,10 +163,10 @@ Office app:
 
 ## Phase 6 — Demo packaging · branch `phase/6-demo`
 
-- [ ] Release APK of agent app (signed, installable on a demo phone)
-- [ ] Walkthrough script: phone onboarding → desktop approval → SMS (≤2 min)
-- [ ] Pilot proposal one-pager PDF (scope, exclusions, acceptance criteria, pricing frame, retainer + phase-2 upsells)
-- [ ] Product section on urbantrends.dev
+- [ ] Release APK of agent app (signed, installable on a demo phone) — BLOCKED: no Flutter toolchain in this env; Dart source written, needs a build machine
+- [x] Walkthrough script: phone onboarding → desktop approval → SMS (≤2 min) (`docs/demo/walkthrough-script.md`)
+- [x] Pilot proposal one-pager (`docs/demo/pilot-proposal.md`; markdown — PDF conversion is a follow-up)
+- [x] Product section on urbantrends.dev (`docs/demo/landing-section.md`, copy)
 
 **Done when:** a prospect can be handed a phone, watch the loop live, and leave with the proposal.
 
@@ -250,4 +252,33 @@ Record any decision not covered by CLAUDE.md here (date, decision, why). Keep CL
 - 2026-07-03 — **Refresh-token reuse is detected and rejected.** Rotation revokes
   the presented token and issues a new one in one transaction; if the presented
   token was already revoked, rotation returns `None` and the endpoint answers
-  401 (possible token theft). Refresh cookies/tokens are cleared client-side.
+  401 (possible token theft). Refresh cookies/tokens are cleared client-side.- 2026-07-06 — **Full demo seed generates 40 applications across every status.**
+  §15 requires ~40 applications spread across all statuses with consistent event
+  history. The seed builds them from deterministic v5 UUIDs (idempotent) with a
+  fixed status distribution; Nakuru has an agent but no reviewer, so its apps
+  only reach `draft`/`submitted` (honouring branch-scoped review). Approved apps
+  get tenant-scoped `JM-000NN` client numbers matching the approval code's
+  scheme. Products (`SAV`/`LOAN`/`INS`) are seeded and mirrored in the Flutter
+  agent's fixed product list (agents can't list `/products` — admin-only).
+- 2026-07-06 — **SMS provider selection is `SMS_DRY_RUN`, not a new flag.**
+  Mirrors the existing `EMAIL_DRY_RUN` convention: default true → MockProvider;
+  false → AfricasTalking (primary) → Infobip (fallback) via `FallbackProvider`,
+  built by `integrations::sms::provider_from_env`. Missing creds fall back to the
+  mock so dev/demo always works. Reconciled env var names to the pre-existing
+  `AFRICASTALKING_*` / `INFOBIP_*` in `.env.example`.
+- 2026-07-06 — **`jobs.provider` + `provider_message_id` (migration 0006).** §9
+  requires recording which provider delivered on the job row. `send_sms` calls
+  `db::jobs::set_provider` on success (columns only); `run_one` still marks the
+  job `done`, so status handling stays centralised.
+- 2026-07-06 — **Prod deploy is a separate compose file, not the dev one.**
+  `ops/docker-compose.prod.yml` pulls the GHCR image, drops MinIO (prod uses
+  Hetzner Object Storage), and puts Caddy in front (`ops/Caddyfile`). CI's
+  `docker` job pushes `ghcr.io/<repo>/backend:{latest,sha-…}` on `main` only.
+  Backups + alerting are a runbook (`ops/DEPLOY.md`, `ops/backup.sh`) — kept
+  lightweight per the no-gold-plating rule; Prometheus/Grafana is post-pilot.
+- 2026-07-06 — **Flutter agent stepper written but uncompiled.** No Flutter/Dart
+  toolchain in the build env, so the full Dart stepper (client details → docs →
+  OTP → consent → submit, progressive PATCH save, camera capture + on-device
+  compression, returned-notes re-open) is committed as source only. It must be
+  `flutter analyze`/built on a Flutter machine, which also unblocks the Phase 6
+  signed APK. OpenAPI/utoipa remains the one open backend item.
