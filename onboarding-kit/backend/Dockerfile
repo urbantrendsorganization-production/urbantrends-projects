@@ -19,7 +19,10 @@ ENV SQLX_OFFLINE=true
 RUN cargo build --release --bin api --bin worker
 
 # ── Runtime: minimal image with both binaries ────────────────────────────────
-FROM debian:bookworm-slim AS runtime
+# Must match the builder's Debian release (cargo-chef:latest-rust-1 tracks the
+# newest stable Debian = trixie, glibc 2.41). A bookworm runtime (glibc 2.36)
+# fails at boot with `GLIBC_2.38 not found`.
+FROM debian:trixie-slim AS runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*

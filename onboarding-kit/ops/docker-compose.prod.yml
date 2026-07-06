@@ -1,0 +1,101 @@
+# OnboardKit production stack (CLAUDE.md §14).
+#   Deploy to /srv/urbantrends/onboardkit/ on the Hetzner box.
+#   docker compose -f docker-compose.prod.yml --env-file .env up -d
+#
+# Differences from the dev stack (ops/docker-compose.yml):
+#   - Pulls the prebuilt image from GHCR instead of building locally.
+#   - No MinIO: prod uses Hetzner Object Storage (S3_ENDPOINT points at it).
+#   - Only Caddy is exposed to the internet; api/postgres stay on the internal
+#     network. Caddy terminates TLS for onboardkit.urbantrends.dev.
+#   - Everything restarts unless-stopped.
+
+name: onboardkit
+
+x-backend-env: &backend-env
+  APP_ENV: production
+  RUST_LOG: ${RUST_LOG:-info,sqlx=warn,tower_http=info}
+  DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  DB_MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-10}
+  JWT_SECRET: ${JWT_SECRET:?set a strong JWT_SECRET in .env}
+  JWT_ACCESS_TTL_SECS: ${JWT_ACCESS_TTL_SECS:-900}
+  JWT_REFRESH_TTL_SECS: ${JWT_REFRESH_TTL_SECS:-1209600}
+  S3_ENDPOINT: ${S3_ENDPOINT:?set the Hetzner Object Storage endpoint}
+  S3_REGION: ${S3_REGION}
+  S3_BUCKET: ${S3_BUCKET}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+  S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+  WORKER_POLL_INTERVAL_SECS: ${WORKER_POLL_INTERVAL_SECS:-5}
+  # OTP codes must never be exposed in prod.
+  DEV_EXPOSE_OTP: "false"
+  CONSENT_TERMS_VERSION: ${CONSENT_TERMS_VERSION:-v1}
+  # SMS: set false to actually deliver (AT primary, Infobip fallback).
+  SMS_DRY_RUN: ${SMS_DRY_RUN:-false}
+  AFRICASTALKING_USERNAME: ${AFRICASTALKING_USERNAME}
+  AFRICASTALKING_API_KEY: ${AFRICASTALKING_API_KEY}
+  AFRICASTALKING_SENDER_ID: ${AFRICASTALKING_SENDER_ID}
+  INFOBIP_BASE_URL: ${INFOBIP_BASE_URL}
+  INFOBIP_API_KEY: ${INFOBIP_API_KEY}
+  INFOBIP_SENDER_ID: ${INFOBIP_SENDER_ID}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    image: ghcr.io/${GHCR_REPO:-urbantrends/onboardkit}/backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    command: ["api"]
+    environment:
+      <<: *backend-env
+      API_HOST: 0.0.0.0
+      API_PORT: 8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  jobs:
+    image: ghcr.io/${GHCR_REPO:-urbantrends/onboardkit}/backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    command: ["worker"]
+    environment:
+      <<: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:
