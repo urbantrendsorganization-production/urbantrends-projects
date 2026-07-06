@@ -7,6 +7,7 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions, clippy::doc_markdown)]
 
+pub mod doc_assist;
 pub mod email;
 pub mod image_ops;
 pub mod mime;

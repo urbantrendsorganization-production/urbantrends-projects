@@ -2189,6 +2189,7 @@ dependencies = [
  "aws-credential-types",
  "aws-sdk-s3",
  "aws-smithy-async",
+ "base64",
  "chrono",
  "getrandom 0.3.4",
  "hex",

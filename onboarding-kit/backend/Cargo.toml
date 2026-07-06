@@ -72,6 +72,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # Image processing (process_image job) — §10
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 infer = "0.16"
+# base64: encode KYC images for the Anthropic vision block (doc_assist, opt-in).
+base64 = "0.22"
 
 # Observability
 tracing = "0.1"

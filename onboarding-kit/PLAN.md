@@ -282,3 +282,21 @@ Record any decision not covered by CLAUDE.md here (date, decision, why). Keep CL
   compression, returned-notes re-open) is committed as source only. It must be
   `flutter analyze`/built on a Flutter machine, which also unblocks the Phase 6
   signed APK. OpenAPI/utoipa remains the one open backend item.
+- 2026-07-06 — **LLM document-assist is a §1 scope extension (opt-in), agreed
+  with the user.** §1 puts *automated* ID verification out of MVP scope. We add
+  an **assistive** path only: an LLM reads a KYC image and *suggests* form-field
+  values a human reviewer edits and confirms — it never decides an application,
+  so manual human review is preserved. Gated by `LLM_DOC_ASSIST` (default
+  **false**); `integrations::doc_assist::extractor_from_env` returns
+  `DisabledExtractor` unless explicitly on. **PII/DPA:** enabling it sends
+  document images + PII to Anthropic (external processor) — needs a lawful basis
+  under the Kenya DPA 2019 and a consent-terms line; documented in `.env.example`.
+  Implementation: raw HTTP to the Anthropic Messages API (no Rust SDK), model
+  `claude-opus-4-8` (override via `LLM_DOC_ASSIST_MODEL`), **structured outputs**
+  (`output_config.format` JSON schema) so the reply is guaranteed-parseable; no
+  `thinking`/`effort` sent (the schema constrains the reply, and `effort` 400s on
+  haiku, keeping the request valid across opus/sonnet/haiku). Never logs the
+  image, key, bodies, or extracted fields — only doc kind + populated-field count.
+  **NOT wired yet:** the `extract_document` job, a column to persist suggestions,
+  the API endpoint, and the reviewer/agent UI to show + accept them are the
+  follow-up; this session lands the `integrations` extractor + 6 unit tests only.
