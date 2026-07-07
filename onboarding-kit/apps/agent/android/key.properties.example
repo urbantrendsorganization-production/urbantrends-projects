@@ -1,0 +1,19 @@
+# OnboardKit Agent — release signing (upload key for Google Play).
+#
+# Copy to android/key.properties and fill in real values. NEVER commit the real
+# file or the keystore — both are gitignored (android/.gitignore).
+#
+# Generate an upload keystore once:
+#
+#   keytool -genkey -v -keystore upload-keystore.jks \
+#     -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+#
+# Store upload-keystore.jks OUTSIDE the repo (e.g. ~/keys/onboardkit/) and point
+# storeFile at its absolute path. With Google Play App Signing enabled, this is
+# only the *upload* key — Google holds the app signing key, so losing this one is
+# recoverable via Play Console.
+
+storePassword=CHANGE_ME
+keyPassword=CHANGE_ME
+keyAlias=upload
+storeFile=/absolute/path/to/upload-keystore.jks

@@ -1,5 +1,7 @@
 //! Admin endpoints (§7): tenant-wide CRUD for branches, users, and products.
-//! Every handler is admin-only via the `RequireAdmin` guard and tenant-scoped.
+//! Handlers are admin-only via the `RequireAdmin` guard and tenant-scoped, with
+//! one exception: listing products (`GET /products`) is readable by any
+//! authenticated tenant user so agents can pick a `product_code` (§7).
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -14,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::auth::RequireAdmin;
+use crate::auth::{AuthUser, RequireAdmin};
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
@@ -213,9 +215,12 @@ pub(crate) struct UpdateProduct {
     security(("bearer_auth" = [])),
     responses((status = 200, description = "All products in the tenant", body = Vec<ProductDto>)),
 )]
+// Readable by any authenticated tenant user (not just admins): agents need the
+// product list to pick a `product_code` when opening an application (§7).
+// Creating/updating products remains admin-only below.
 pub(crate) async fn list_products(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    user: AuthUser,
 ) -> AppResult<Json<Vec<ProductDto>>> {
     let rows = products::list(&state.pool, user.tenant_id()).await?;
     Ok(Json(rows.into_iter().map(ProductDto::from).collect()))

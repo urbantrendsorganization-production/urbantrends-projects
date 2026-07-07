@@ -54,6 +54,48 @@ past the retention window. Install as a daily cron:
 0 3 * * *  /srv/urbantrends/onboardkit/ops/backup.sh >> /var/log/onboardkit-backup.log 2>&1
 ```
 
+## Mobile app (agent APK / Play Store)
+
+The Flutter agent app is **not** part of the server stack — it's built and
+distributed separately. The API base URL is compiled in at build time, so the
+build must target the deployed backend, not localhost.
+
+Build the release AAB for Google Play:
+
+```bash
+cd apps/agent
+flutter build appbundle --release \
+  --dart-define=API_BASE_URL=https://onboardkit.urbantrends.dev \
+  --dart-define=CONSENT_TERMS_VERSION=v1     # must match the server's CONSENT_TERMS_VERSION
+```
+
+For a sideloadable demo APK, swap `appbundle` for `apk`.
+
+`CONSENT_TERMS_VERSION` must equal the server value (`ops/.env`) or the consent
+endpoint rejects submissions. Bump `version:` in `apps/agent/pubspec.yaml`
+(`x.y.z+build`) for every Play upload — the `+build` number must increase.
+
+### Release signing (one-time setup)
+
+Play uploads must be signed with a real upload key, not the debug key. Signing
+is driven by `apps/agent/android/key.properties` (gitignored):
+
+1. Generate an upload keystore, stored **outside** the repo:
+   ```bash
+   keytool -genkey -v -keystore ~/keys/onboardkit/upload-keystore.jks \
+     -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+   ```
+2. `cp android/key.properties.example android/key.properties` and fill in the
+   passwords, alias, and absolute `storeFile` path.
+3. Enable **Play App Signing** in the Play Console (Google holds the real app
+   signing key; `key.properties` is only your upload key — recoverable if lost).
+
+When `key.properties` is absent, the release build falls back to debug signing
+(so `flutter run --release` works for devs) — that build is **not** publishable.
+
+App id: `dev.urbantrends.agent`. Never commit `key.properties`, `*.jks`, or
+`*.keystore` — all gitignored.
+
 ## Alerting (baseline)
 
 The api/worker log JSON in prod (`APP_ENV=production`). Minimum viable alerting

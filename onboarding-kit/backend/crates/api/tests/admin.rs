@@ -272,3 +272,79 @@ async fn non_admin_cannot_reach_admin_endpoints(pool: PgPool) {
         assert_eq!(status, StatusCode::FORBIDDEN, "{uri} should be admin-only");
     }
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn agent_can_list_products_but_not_create(pool: PgPool) {
+    // Seed one tenant with both an admin and an agent.
+    let tenant = Uuid::new_v4();
+    let admin_id = Uuid::new_v4();
+    let agent_id = Uuid::new_v4();
+    let admin_email = format!("admin.{admin_id}@example.com");
+    let agent_email = format!("agent.{agent_id}@example.com");
+    let hash = onboardkit_integrations::password::hash(PASSWORD).expect("hash");
+    sqlx::query("INSERT INTO tenants (id, name) VALUES ($1, 'T')")
+        .bind(tenant)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO users (id, tenant_id, full_name, phone, email, password_hash, role)
+         VALUES ($1, $2, 'Admin', '+254712345678', $3, $4, 'admin')",
+    )
+    .bind(admin_id)
+    .bind(tenant)
+    .bind(&admin_email)
+    .bind(&hash)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO users (id, tenant_id, full_name, phone, email, password_hash, role)
+         VALUES ($1, $2, 'Agent', '+254712345679', $3, $4, 'agent')",
+    )
+    .bind(agent_id)
+    .bind(tenant)
+    .bind(&agent_email)
+    .bind(&hash)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let app = app(pool);
+    let admin = admin_token(&app, &admin_email).await;
+    let agent = admin_token(&app, &agent_email).await;
+
+    // Admin creates a product.
+    let (status, _) = send(
+        &app,
+        post(
+            "/api/v1/products",
+            &admin,
+            &json!({ "code": "NEW", "name": "New Product" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // The agent can list products and sees the admin-created one.
+    let (status, body) = send(&app, get("/api/v1/products", &agent)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let codes: Vec<&str> = body
+        .as_array()
+        .expect("array")
+        .iter()
+        .filter_map(|p| p["code"].as_str())
+        .collect();
+    assert!(
+        codes.contains(&"NEW"),
+        "agent should see the admin-created product: {body}"
+    );
+
+    // But an agent still cannot create products.
+    let (status, _) = send(
+        &app,
+        post("/api/v1/products", &agent, &json!({ "code": "X", "name": "X" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}

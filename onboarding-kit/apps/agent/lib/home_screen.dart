@@ -178,17 +178,17 @@ class _NewClientInput {
   final String productCode;
 }
 
-class _NewClientDialog extends StatefulWidget {
+class _NewClientDialog extends ConsumerStatefulWidget {
   const _NewClientDialog();
 
   @override
-  State<_NewClientDialog> createState() => _NewClientDialogState();
+  ConsumerState<_NewClientDialog> createState() => _NewClientDialogState();
 }
 
-class _NewClientDialogState extends State<_NewClientDialog> {
+class _NewClientDialogState extends ConsumerState<_NewClientDialog> {
   final _formKey = GlobalKey<FormState>();
   final _name = TextEditingController();
-  String _product = AppConfig.products.first.code;
+  String? _product;
 
   @override
   void dispose() {
@@ -196,8 +196,31 @@ class _NewClientDialogState extends State<_NewClientDialog> {
     super.dispose();
   }
 
+  /// Products come from the backend (`GET /products`, admin-managed). If the
+  /// fetch is still loading or failed, fall back to the seeded defaults so the
+  /// agent can always start an onboarding.
+  Widget _productField(List<ProductOption> products) {
+    // Keep the selection valid against whatever list is currently shown.
+    if (_product == null || !products.any((p) => p.code == _product)) {
+      _product = products.isEmpty ? null : products.first.code;
+    }
+    return DropdownButtonFormField<String>(
+      value: _product,
+      decoration: const InputDecoration(
+        labelText: 'Product',
+        border: OutlineInputBorder(),
+      ),
+      items: [
+        for (final p in products)
+          DropdownMenuItem(value: p.code, child: Text(p.name)),
+      ],
+      onChanged: (v) => setState(() => _product = v ?? _product),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final productsAsync = ref.watch(productsProvider);
     return AlertDialog(
       title: const Text('New client'),
       content: Form(
@@ -217,17 +240,15 @@ class _NewClientDialogState extends State<_NewClientDialog> {
                   (v == null || v.trim().isEmpty) ? 'Enter a name' : null,
             ),
             const SizedBox(height: 16),
-            DropdownButtonFormField<String>(
-              value: _product,
-              decoration: const InputDecoration(
-                labelText: 'Product',
-                border: OutlineInputBorder(),
+            productsAsync.when(
+              data: (fetched) => _productField(
+                fetched.isEmpty ? AppConfig.products : fetched,
               ),
-              items: [
-                for (final p in AppConfig.products)
-                  DropdownMenuItem(value: p.code, child: Text(p.name)),
-              ],
-              onChanged: (v) => setState(() => _product = v ?? _product),
+              loading: () => const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: LinearProgressIndicator(),
+              ),
+              error: (_, __) => _productField(AppConfig.products),
             ),
           ],
         ),
@@ -240,10 +261,12 @@ class _NewClientDialogState extends State<_NewClientDialog> {
         FilledButton(
           onPressed: () {
             if (!_formKey.currentState!.validate()) return;
+            final product = _product;
+            if (product == null) return;
             Navigator.of(context).pop(
               _NewClientInput(
                 fullName: _name.text.trim(),
-                productCode: _product,
+                productCode: product,
               ),
             );
           },

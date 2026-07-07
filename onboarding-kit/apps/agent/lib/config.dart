@@ -19,10 +19,10 @@ class AppConfig {
     defaultValue: 'v1',
   );
 
-  /// Product codes an agent can start an onboarding under. The backend does not
-  /// expose a product list to agents (`/products` is admin-only), so the MVP
-  /// ships a fixed set that mirrors the seeded demo tenant. `product_code` is a
-  /// free-text column server-side, so this list is safe to extend.
+  /// Fallback product list, used only when `GET /products` is unavailable
+  /// (offline, or before the first fetch resolves). The live list comes from
+  /// the backend (`productsProvider` → `/products`, admin-managed), so products
+  /// an admin adds show up in the app. This mirrors the seeded demo tenant.
   static const List<ProductOption> products = [
     ProductOption(code: 'SAV', name: 'Chama Savings Account'),
     ProductOption(code: 'LOAN', name: 'Biashara Business Loan'),

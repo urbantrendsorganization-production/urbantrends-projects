@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../config.dart' show ProductOption;
 import 'api_exception.dart';
 import 'health.dart' show dioProvider;
 import 'models.dart';
@@ -57,6 +58,27 @@ class ApplicationsRepository {
     try {
       final res = await _dio.get<dynamic>('/api/v1/applications/$id');
       return ApplicationDetail.fromJson(_map(res));
+    } catch (e) {
+      throw ApiException.from(e);
+    }
+  }
+
+  /// `GET /products` — the tenant's active products, so the agent picks a
+  /// real `product_code` (admin-managed) instead of a hardcoded list. Inactive
+  /// products are filtered out here.
+  Future<List<ProductOption>> listProducts() async {
+    try {
+      final res = await _dio.get<dynamic>('/api/v1/products');
+      final data = res.data;
+      final list = data is List ? data : const [];
+      return [
+        for (final item in list)
+          if (item is Map && item['is_active'] == true)
+            ProductOption(
+              code: (item['code'] ?? '').toString(),
+              name: (item['name'] ?? '').toString(),
+            ),
+      ];
     } catch (e) {
       throw ApiException.from(e);
     }
@@ -256,4 +278,10 @@ class ApplicationsRepository {
 
 final applicationsRepositoryProvider = Provider<ApplicationsRepository>((ref) {
   return ApplicationsRepository(ref.watch(dioProvider));
+});
+
+/// The tenant's active products, fetched from the backend (admin-managed). The
+/// new-client dialog watches this so admin-added products appear in the app.
+final productsProvider = FutureProvider<List<ProductOption>>((ref) {
+  return ref.watch(applicationsRepositoryProvider).listProducts();
 });
