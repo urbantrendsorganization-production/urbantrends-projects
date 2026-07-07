@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u.id AS \"agent_id!\", u.full_name AS \"agent_name!\",\n                  COUNT(a.id) AS \"total!\",\n                  COUNT(a.id) FILTER (WHERE a.current_status = 'approved') AS \"approved!\"\n           FROM users u\n           LEFT JOIN onboarding_applications a\n             ON a.agent_id = u.id AND a.tenant_id = u.tenant_id\n             AND ($2::timestamptz IS NULL OR a.created_at >= $2)\n             AND ($3::timestamptz IS NULL OR a.created_at <= $3)\n           WHERE u.tenant_id = $1 AND u.role = 'agent'\n           GROUP BY u.id, u.full_name\n           ORDER BY \"total!\" DESC, u.full_name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "agent_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "agent_name!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "total!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "approved!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "e8f403ce4ca2c2fe0197b3b7339e69aaaf0577a8f75fb27b456b146abd51e3c9"
+}

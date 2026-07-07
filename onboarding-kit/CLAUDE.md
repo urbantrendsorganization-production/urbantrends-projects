@@ -250,3 +250,13 @@ Demo tenant **"Jubilant Microfinance"**: 3 branches (Kilimani, Thika, Nakuru), 1
 - **Phase 4:** admin CRUD, reports (SQL aggregations + charts), CSV/xlsx export with tenant column mapping, nightly digest
 - **Phase 5:** security checklist pass, Docker/CI/deploy to Hetzner, seed script, tracing/alerting, backups
 - **Phase 6:** demo APK, walkthrough video script, pilot proposal PDF, landing section
+
+## Decisions log
+
+- **`GET /products` is readable by any authenticated tenant user** (create/update
+  stay admin-only). Agents need the product list to pick a `product_code` when
+  opening an application (§7), so the agent app fetches it live via
+  `productsProvider` instead of a hardcoded constant — admin-added products now
+  appear in the mobile app. `AppConfig.products` in the Flutter app is retained
+  only as an offline fallback. Handler: `routes/admin.rs::list_products`
+  (extractor `AuthUser`, not `RequireAdmin`).

@@ -16,6 +16,12 @@ dependencies:
   dio: ^5.7.0
   # Secure token storage.
   flutter_secure_storage: ^9.2.2
+  # KYC document capture (native camera / gallery) — CLAUDE.md §12 step 2.
+  image_picker: ^1.1.2
+  # On-device image compression before upload (CLAUDE.md §12: compress first).
+  flutter_image_compress: ^2.3.0
+  # Date formatting for the client details step and list timestamps.
+  intl: ^0.19.0
 
 dev_dependencies:
   flutter_test:

@@ -1,0 +1,17 @@
+# OnboardKit reverse proxy (CLAUDE.md §14).
+# Caddy terminates TLS (auto Let's Encrypt) and proxies to the api service.
+# The office Next.js app is deployed separately; this vhost is the API only.
+
+onboardkit.urbantrends.dev {
+	encode gzip
+
+	# API — the only publicly reachable backend surface. KYC documents are
+	# never proxied through here; clients fetch them via short-lived presigned
+	# S3 URLs (§11).
+	reverse_proxy api:8080
+
+	log {
+		output stdout
+		format console
+	}
+}

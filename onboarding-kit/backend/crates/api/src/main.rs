@@ -3,6 +3,8 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::doc_markdown)]
 
+use std::net::SocketAddr;
+
 use onboardkit_api::config::Config;
 use onboardkit_api::state::{AppState, JwtState};
 use onboardkit_api::{build_router, shutdown_signal, telemetry};
@@ -31,15 +33,34 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
 
-    let state = AppState::new(pool, JwtState::new(config.jwt.clone()));
+    // Self-provision the schema on boot so a fresh database is ready to serve.
+    onboardkit_db::run_migrations(&pool).await?;
+    tracing::info!("migrations applied");
+
+    let storage = onboardkit_integrations::ObjectStore::new(&config.storage);
+    if let Err(error) = storage.ensure_bucket().await {
+        tracing::warn!(%error, "could not ensure object storage bucket (continuing)");
+    }
+
+    let state = AppState::new(
+        pool,
+        JwtState::new(config.jwt.clone()),
+        storage,
+        config.settings.clone(),
+    );
     let app = build_router(state);
 
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     tracing::info!(addr = %config.bind_addr, "listening");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    // `ConnectInfo` supplies the peer address the rate limiter keys on when no
+    // forwarded header is present (§13).
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
 
     tracing::info!("onboardkit-api stopped");
     Ok(())

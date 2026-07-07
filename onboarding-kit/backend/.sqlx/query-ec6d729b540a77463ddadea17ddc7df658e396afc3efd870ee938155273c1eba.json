@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE onboarding_applications\n           SET consent_at = $3, consent_terms_version = $4\n           WHERE id = $1 AND tenant_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ec6d729b540a77463ddadea17ddc7df658e396afc3efd870ee938155273c1eba"
+}

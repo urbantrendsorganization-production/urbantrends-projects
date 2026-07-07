@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT b.id AS \"branch_id!\", b.name AS \"branch_name!\", COUNT(a.id) AS \"total!\"\n           FROM branches b\n           LEFT JOIN onboarding_applications a\n             ON a.branch_id = b.id AND a.tenant_id = b.tenant_id\n             AND ($2::timestamptz IS NULL OR a.created_at >= $2)\n             AND ($3::timestamptz IS NULL OR a.created_at <= $3)\n           WHERE b.tenant_id = $1\n           GROUP BY b.id, b.name\n           ORDER BY \"total!\" DESC, b.name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "branch_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "branch_name!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "total!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "acd6510bd09a978a8458135d3cf75adc4b3f0a7abddcca67e0d0645b588cb880"
+}

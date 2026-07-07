@@ -6,13 +6,14 @@
 use axum::extract::FromRequestParts;
 use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
-use jsonwebtoken::decode;
+use chrono::Utc;
+use jsonwebtoken::{Header, decode, encode};
 use onboardkit_core::Role;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::state::AppState;
+use crate::state::{AppState, JwtState};
 
 /// Access-token claims. `sub` is the user id; `tenant_id` is resolved from the
 /// user row at login and never from client input (CLAUDE.md §4).
@@ -20,6 +21,9 @@ use crate::state::AppState;
 pub struct Claims {
     pub sub: Uuid,
     pub tenant_id: Uuid,
+    /// The user's branch (agents/reviewers); `None` for tenant-wide admins.
+    #[serde(default)]
+    pub branch_id: Option<Uuid>,
     pub role: Role,
     /// Expiry, seconds since the Unix epoch.
     pub exp: i64,
@@ -44,6 +48,11 @@ impl AuthUser {
     #[must_use]
     pub fn tenant_id(&self) -> Uuid {
         self.claims.tenant_id
+    }
+
+    #[must_use]
+    pub fn branch_id(&self) -> Option<Uuid> {
+        self.claims.branch_id
     }
 
     #[must_use]
@@ -81,6 +90,86 @@ impl FromRequestParts<AppState> for AuthUser {
     }
 }
 
+/// A freshly issued access token and its lifetime in seconds.
+#[derive(Debug, Clone)]
+pub struct IssuedAccess {
+    pub token: String,
+    pub expires_in: i64,
+}
+
+/// Issue a signed access JWT for a user. The tenant always comes from the user
+/// row, never from client input (CLAUDE.md §4).
+///
+/// # Errors
+/// Returns [`AppError::Internal`] if signing fails.
+pub fn issue_access_token(
+    jwt: &JwtState,
+    user_id: Uuid,
+    tenant_id: Uuid,
+    branch_id: Option<Uuid>,
+    role: Role,
+) -> Result<IssuedAccess, AppError> {
+    let ttl = i64::try_from(jwt.config.access_ttl.as_secs()).unwrap_or(i64::MAX);
+    let now = Utc::now().timestamp();
+    let claims = Claims {
+        sub: user_id,
+        tenant_id,
+        branch_id,
+        role,
+        iat: now,
+        exp: now + ttl,
+    };
+    let token = encode(&Header::default(), &claims, &jwt.encoding)
+        .map_err(|error| AppError::Internal(error.into()))?;
+    Ok(IssuedAccess {
+        token,
+        expires_in: ttl,
+    })
+}
+
+/// Generate the RBAC extractors. Each wraps [`AuthUser`] and rejects with 403
+/// unless the caller holds the required role (CLAUDE.md §7). RBAC lives here in
+/// the extractor layer, not ad hoc inside handlers.
+macro_rules! role_guard {
+    ($(#[$meta:meta])* $name:ident, $role:expr) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone)]
+        pub struct $name(pub AuthUser);
+
+        impl FromRequestParts<AppState> for $name {
+            type Rejection = AppError;
+
+            async fn from_request_parts(
+                parts: &mut Parts,
+                state: &AppState,
+            ) -> Result<Self, Self::Rejection> {
+                let user = AuthUser::from_request_parts(parts, state).await?;
+                if user.role() == $role {
+                    Ok($name(user))
+                } else {
+                    Err(AppError::Forbidden)
+                }
+            }
+        }
+    };
+}
+
+role_guard!(
+    /// Requires an authenticated agent.
+    RequireAgent,
+    Role::Agent
+);
+role_guard!(
+    /// Requires an authenticated reviewer.
+    RequireReviewer,
+    Role::Reviewer
+);
+role_guard!(
+    /// Requires an authenticated admin.
+    RequireAdmin,
+    Role::Admin
+);
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -107,6 +196,7 @@ mod tests {
         Claims {
             sub: Uuid::new_v4(),
             tenant_id: Uuid::new_v4(),
+            branch_id: None,
             role: Role::Agent,
             iat: now,
             exp: now + exp_offset_secs,

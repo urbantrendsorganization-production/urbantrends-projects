@@ -1,4 +1,16 @@
-//! HTTP route modules. Phase 0 exposes only the health check; auth, application
-//! and admin routes are added in later phases.
+//! HTTP route modules.
 
+pub mod admin;
+pub mod applications;
+pub mod auth;
+pub mod clients;
+pub mod consent;
+pub mod documents;
+pub mod dto;
+pub mod exports;
+pub mod guard;
 pub mod health;
+pub mod otp;
+pub mod reports;
+pub mod review;
+pub mod session;

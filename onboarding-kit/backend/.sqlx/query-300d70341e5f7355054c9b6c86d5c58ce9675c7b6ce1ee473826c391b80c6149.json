@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE clients SET client_number = $3\n               WHERE id = $1 AND tenant_id = $2 AND client_number IS NULL\n               RETURNING client_number",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "client_number",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "300d70341e5f7355054c9b6c86d5c58ce9675c7b6ce1ee473826c391b80c6149"
+}

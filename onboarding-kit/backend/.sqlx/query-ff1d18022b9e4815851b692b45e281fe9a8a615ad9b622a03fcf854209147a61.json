@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(DISTINCT doc_type) AS \"count!\"\n           FROM kyc_documents\n           WHERE tenant_id = $1 AND application_id = $2 AND processed = TRUE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ff1d18022b9e4815851b692b45e281fe9a8a615ad9b622a03fcf854209147a61"
+}

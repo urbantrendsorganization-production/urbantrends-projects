@@ -6,3 +6,17 @@
 
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions, clippy::doc_markdown)]
+
+pub mod doc_assist;
+pub mod email;
+pub mod image_ops;
+pub mod mime;
+pub mod otp;
+pub mod password;
+pub mod phone;
+pub mod sms;
+pub mod storage;
+pub mod token;
+
+pub use phone::{Phone, PhoneError};
+pub use storage::{ObjectStore, StorageConfig};

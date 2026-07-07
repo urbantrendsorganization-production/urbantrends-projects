@@ -31,6 +31,9 @@ pub enum AppError {
     #[error("conflict: {0}")]
     Conflict(String),
 
+    #[error("too many requests")]
+    TooManyRequests,
+
     /// Any unexpected failure. The inner error is logged, never returned.
     #[error("internal error")]
     Internal(#[source] anyhow::Error),
@@ -45,6 +48,7 @@ impl AppError {
             AppError::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request"),
             AppError::Validation(_) => (StatusCode::UNPROCESSABLE_ENTITY, "validation_error"),
             AppError::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
+            AppError::TooManyRequests => (StatusCode::TOO_MANY_REQUESTS, "too_many_requests"),
             AppError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
         }
     }
@@ -55,6 +59,7 @@ impl AppError {
             AppError::Unauthorized => "Authentication required.".to_string(),
             AppError::Forbidden => "You do not have permission to perform this action.".to_string(),
             AppError::NotFound => "The requested resource was not found.".to_string(),
+            AppError::TooManyRequests => "Too many requests. Please try again later.".to_string(),
             AppError::BadRequest(msg) | AppError::Validation(msg) | AppError::Conflict(msg) => {
                 msg.clone()
             }

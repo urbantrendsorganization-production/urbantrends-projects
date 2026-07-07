@@ -7,6 +7,14 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions, clippy::doc_markdown)]
 
+pub mod jobs;
+pub mod state_machine;
+
+pub use state_machine::{
+    Actor, Status, StatusKind, Transition, TransitionAction, TransitionError, UnknownStatus,
+    apply_transition,
+};
+
 /// User roles as defined in CLAUDE.md §5. Kept here in Phase 0 so both the API
 /// and JWT layers can reference a single source of truth; RBAC behaviour lands
 /// in Phase 1.
@@ -28,7 +36,26 @@ impl Role {
             Role::Admin => "admin",
         }
     }
+
+    /// Parse the database/wire string form back into a [`Role`].
+    ///
+    /// # Errors
+    /// Returns [`UnknownRole`] if `value` is not a known role, which indicates
+    /// database corruption or schema drift.
+    pub fn from_db(value: &str) -> Result<Self, UnknownRole> {
+        match value {
+            "agent" => Ok(Role::Agent),
+            "reviewer" => Ok(Role::Reviewer),
+            "admin" => Ok(Role::Admin),
+            other => Err(UnknownRole(other.to_owned())),
+        }
+    }
 }
+
+/// Returned when a role string from the database is not recognized.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("unknown role: {0}")]
+pub struct UnknownRole(pub String);
 
 #[cfg(test)]
 mod tests {

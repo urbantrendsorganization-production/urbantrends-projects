@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO clients (tenant_id, full_name)\n           VALUES ($1, $2)\n           RETURNING id, tenant_id, full_name, phone, national_id_number, kra_pin,\n                     date_of_birth, address, next_of_kin, client_number, created_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "full_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "phone",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "national_id_number",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "kra_pin",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "date_of_birth",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 7,
+        "name": "address",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "next_of_kin",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 9,
+        "name": "client_number",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "2ab7ebfbffbb878e65b4948859c918fdcf2d82863fdfb603ef414a2db3e9e8d0"
+}

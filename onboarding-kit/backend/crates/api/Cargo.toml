@@ -18,11 +18,13 @@ path = "src/main.rs"
 [dependencies]
 onboardkit-core.workspace = true
 onboardkit-db.workspace = true
+onboardkit-integrations.workspace = true
 
 axum.workspace = true
 tokio.workspace = true
 tower.workspace = true
 tower-http.workspace = true
+tower_governor.workspace = true
 
 sqlx.workspace = true
 serde.workspace = true
@@ -35,3 +37,10 @@ chrono.workspace = true
 uuid.workspace = true
 dotenvy.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true
+csv.workspace = true
+rust_xlsxwriter.workspace = true
+utoipa.workspace = true
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }

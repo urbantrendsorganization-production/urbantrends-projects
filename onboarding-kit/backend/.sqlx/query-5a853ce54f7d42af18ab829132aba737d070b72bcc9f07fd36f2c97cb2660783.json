@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE onboarding_applications\n           SET current_status = 'submitted', submitted_at = $3\n           WHERE id = $1 AND tenant_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5a853ce54f7d42af18ab829132aba737d070b72bcc9f07fd36f2c97cb2660783"
+}

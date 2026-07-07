@@ -31,10 +31,11 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all
 ```
 
-## Migrations & SQLx offline cache
+## Migrations, seed & SQLx offline cache
 
-Schema lives in `migrations/` and is the source of truth (CLAUDE.md §5). It is
-seeded starting in Phase 1; Phase 0 ships the tooling only.
+Schema lives in `migrations/` and is the source of truth (CLAUDE.md §5). The api
+and worker embed the migrations (`sqlx::migrate!`) and apply them on startup, so
+a fresh database self-provisions. To manage them by hand:
 
 ```bash
 export DATABASE_URL=postgres://onboardkit:onboardkit@localhost:5432/onboardkit
@@ -45,9 +46,16 @@ sqlx migrate run
 sqlx migrate add <name>
 ```
 
-Compile-time-checked `sqlx::query!` / `query_as!` macros require an offline
-query cache so CI can build without a database. Regenerate it whenever queries
-change and commit the `.sqlx/` directory:
+Seed the demo tenant (idempotent — Jubilant Microfinance, 3 branches, one user
+per role; all share the password `Password123!`):
+
+```bash
+cargo run -p onboardkit-db --bin seed
+```
+
+Compile-time-checked `sqlx::query!` / `query_as!` macros use a committed offline
+query cache so CI (and the Docker build) compile without a database. Regenerate
+it whenever queries change and commit the `.sqlx/` directory:
 
 ```bash
 cargo sqlx prepare --workspace
@@ -55,5 +63,5 @@ git add .sqlx
 ```
 
 CI verifies the cache is current with `cargo sqlx prepare --workspace --check`
-and builds with `SQLX_OFFLINE=true`. Phase 0 contains no `query!` macros yet, so
-the build already succeeds fully offline.
+and compiles with `SQLX_OFFLINE=true`; a Postgres service backs the runtime
+`#[sqlx::test]` integration tests.

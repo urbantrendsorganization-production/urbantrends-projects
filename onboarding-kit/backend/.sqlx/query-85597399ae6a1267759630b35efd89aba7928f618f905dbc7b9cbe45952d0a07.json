@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO application_events\n             (tenant_id, application_id, actor_user_id, from_status, to_status)\n           VALUES ($1, $2, $3, $4, 'submitted')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "85597399ae6a1267759630b35efd89aba7928f618f905dbc7b9cbe45952d0a07"
+}

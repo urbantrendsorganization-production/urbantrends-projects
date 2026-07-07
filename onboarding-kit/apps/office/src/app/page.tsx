@@ -1,9 +1,11 @@
 "use client";
 
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -11,11 +13,18 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 
 type Health = {
   status: string;
   database?: string;
   message?: string;
+};
+
+type Session = {
+  user_id: string;
+  tenant_id: string;
+  role: string;
 };
 
 async function fetchHealth(): Promise<Health> {
@@ -30,17 +39,29 @@ async function fetchHealth(): Promise<Health> {
   }
 }
 
+async function fetchSession(): Promise<Session | null> {
+  try {
+    const res = await fetch("/api/me", { cache: "no-store" });
+    if (!res.ok) return null;
+    return (await res.json()) as Session;
+  } catch {
+    return null;
+  }
+}
+
 export default function Home() {
+  const router = useRouter();
   const [health, setHealth] = useState<Health | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
-    // State is only set after the await resolves — never synchronously in the
-    // effect body (react-hooks/set-state-in-effect).
-    fetchHealth()
-      .then((result) => {
-        if (active) setHealth(result);
+    Promise.all([fetchHealth(), fetchSession()])
+      .then(([h, s]) => {
+        if (!active) return;
+        setHealth(h);
+        setSession(s);
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -50,12 +71,11 @@ export default function Home() {
     };
   }, []);
 
-  const refresh = () => {
-    setLoading(true);
-    fetchHealth()
-      .then(setHealth)
-      .finally(() => setLoading(false));
-  };
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setSession(null);
+    router.push("/login");
+  }
 
   const healthy = health?.status === "ok";
 
@@ -81,13 +101,28 @@ export default function Home() {
             <dd className="text-right font-medium">
               {loading ? "…" : (health?.database ?? "unknown")}
             </dd>
+            <dt className="text-muted-foreground">Session</dt>
+            <dd className="text-right font-medium">
+              {loading ? "…" : session ? `${session.role}` : "signed out"}
+            </dd>
           </dl>
           {health?.message ? (
             <p className="text-sm text-destructive">{health.message}</p>
           ) : null}
-          <Button onClick={refresh} disabled={loading} className="w-full">
-            Refresh
-          </Button>
+          {loading ? null : session ? (
+            <div className="space-y-2">
+              <Link href="/queue" className={cn(buttonVariants(), "w-full")}>
+                Go to review queue
+              </Link>
+              <Button onClick={logout} variant="outline" className="w-full">
+                Sign out
+              </Button>
+            </div>
+          ) : (
+            <Link href="/login" className={cn(buttonVariants(), "w-full")}>
+              Sign in
+            </Link>
+          )}
         </CardContent>
       </Card>
     </main>

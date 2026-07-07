@@ -3,9 +3,15 @@
 use std::sync::Arc;
 
 use jsonwebtoken::{DecodingKey, EncodingKey, Validation};
+use onboardkit_integrations::ObjectStore;
+use onboardkit_integrations::otp::OtpService;
 use sqlx::postgres::PgPool;
 
-use crate::config::JwtConfig;
+use crate::config::{JwtConfig, Settings};
+use crate::otp_store::PgOtpStore;
+
+/// The concrete OTP service type used across the app.
+pub type Otp = OtpService<PgOtpStore>;
 
 /// JWT keys and validation rules derived once at startup from [`JwtConfig`].
 #[derive(Clone)]
@@ -37,14 +43,21 @@ impl JwtState {
 pub struct AppState {
     pub pool: PgPool,
     pub jwt: Arc<JwtState>,
+    pub storage: Arc<ObjectStore>,
+    pub otp: Arc<Otp>,
+    pub settings: Arc<Settings>,
 }
 
 impl AppState {
     #[must_use]
-    pub fn new(pool: PgPool, jwt: JwtState) -> Self {
+    pub fn new(pool: PgPool, jwt: JwtState, storage: ObjectStore, settings: Settings) -> Self {
+        let otp = OtpService::new(PgOtpStore::new(pool.clone()));
         Self {
             pool,
             jwt: Arc::new(jwt),
+            storage: Arc::new(storage),
+            otp: Arc::new(otp),
+            settings: Arc::new(settings),
         }
     }
 }

@@ -7,9 +7,42 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions, clippy::doc_markdown)]
 
+pub mod applications;
+pub mod branches;
+pub mod clients;
+pub mod documents;
+pub mod events;
+pub mod export_digests;
+pub mod exports;
+pub mod jobs;
+pub mod models;
+pub mod otp;
+pub mod products;
+pub mod refresh_tokens;
+pub mod reports;
+pub mod tenants;
+pub mod users;
+
+pub use models::{
+    Application, ApplicationEvent, Branch, Client, KycDocument, OtpRow, Product, RefreshToken,
+    Tenant, User,
+};
+
 use std::time::Duration;
 
 use sqlx::postgres::{PgPool, PgPoolOptions};
+
+/// Migrations embedded from `backend/migrations/`, the schema source of truth
+/// (§5). Run at api/worker startup so a fresh database self-provisions.
+pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
+
+/// Apply any pending migrations. Idempotent.
+///
+/// # Errors
+/// Returns [`sqlx::migrate::MigrateError`] if a migration fails to apply.
+pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
+    MIGRATOR.run(pool).await
+}
 
 /// Options for building the connection pool.
 #[derive(Debug, Clone)]

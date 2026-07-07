@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(reason, '(unspecified)') AS \"reason!\", COUNT(*) AS \"count!\"\n           FROM application_events\n           WHERE tenant_id = $1 AND to_status = 'rejected'\n           GROUP BY reason\n           ORDER BY \"count!\" DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "reason!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "29cc756e39c181205d7273ec79facd1260f3ed84308a4b768ff299034d4e8984"
+}

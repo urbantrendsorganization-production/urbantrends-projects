@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE onboarding_applications SET otp_verified_at = $3\n           WHERE id = $1 AND tenant_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ccabc4dae5e98eb88043e87847c13ee21d8d80d37dc4f987a2fbcfa359409f25"
+}

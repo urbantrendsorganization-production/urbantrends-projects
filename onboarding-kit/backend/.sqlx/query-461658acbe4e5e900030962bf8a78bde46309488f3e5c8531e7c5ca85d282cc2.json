@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO export_digests (tenant_id, digest_date, storage_key, row_count)\n           VALUES ($1, $2, $3, $4)\n           ON CONFLICT (tenant_id, digest_date) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "461658acbe4e5e900030962bf8a78bde46309488f3e5c8531e7c5ca85d282cc2"
+}
