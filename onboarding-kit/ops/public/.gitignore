@@ -1,0 +1,4 @@
+# The built APK is a release artifact, not source — never commit it.
+# Only index.html (the download page) is tracked in this dir.
+*.apk
+*.aab
