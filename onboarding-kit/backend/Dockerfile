@@ -16,7 +16,7 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 # No live database at build time; rely on the committed SQLx offline cache.
 ENV SQLX_OFFLINE=true
-RUN cargo build --release --bin api --bin worker
+RUN cargo build --release --bin api --bin worker --bin seed
 
 # ── Runtime: minimal image with both binaries ────────────────────────────────
 # Must match the builder's Debian release (cargo-chef:latest-rust-1 tracks the
@@ -30,6 +30,9 @@ WORKDIR /app
 
 COPY --from=builder /app/target/release/api /usr/local/bin/api
 COPY --from=builder /app/target/release/worker /usr/local/bin/worker
+# Seed binary (demo/pilot data). Idempotent; run explicitly via
+# `docker compose run --rm api seed`, never on normal boot.
+COPY --from=builder /app/target/release/seed /usr/local/bin/seed
 COPY --from=builder /app/migrations /app/migrations
 
 # Run as an unprivileged user.

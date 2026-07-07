@@ -8,23 +8,36 @@ object storage is Hetzner Object Storage (S3-compatible). No MinIO in prod.
 TLS/routing is handled by the **shared host-level Caddy** that already fronts the
 other UrbanTrends stacks (sitechat, rentflow, urbantrends) — this stack does not
 run its own Caddy. The api publishes on `127.0.0.1:8086` (loopback only, like
-every other app on the box); the host Caddyfile proxies
-`onboardkit.urbantrends.dev` → `127.0.0.1:8086`. Add the vhost once:
+every other app on the box); Caddy proxies `onboardkit.urbantrends.dev` →
+`127.0.0.1:8086`.
+
+The host Caddy loads per-service blocks via `import /etc/caddy/conf.d/*.caddy`,
+so OnboardKit's vhost is a drop-in there (contents in `ops/Caddyfile`). Add it
+once — needs a DNS `A` record for `onboardkit.urbantrends.dev` → this box:
 
 ```bash
-# Append ops/Caddyfile's block to the host Caddyfile, then:
+sudo cp ops/Caddyfile /etc/caddy/conf.d/onboardkit.caddy
 sudo caddy validate --config /etc/caddy/Caddyfile
 sudo systemctl reload caddy
 ```
 
 ## First deploy
 
+OnboardKit lives inside the `urbantrends-projects` monorepo checkout at
+`/opt/urbantrends-projects/onboarding-kit`. A `/opt/onboardkit` symlink keeps the
+paths in this doc, the Caddy `root`, and `backup.sh` short:
+
 ```bash
 ssh hetzner
-mkdir -p /opt/onboardkit && cd /opt/onboardkit
-git clone <repo> .            # or copy ops/ + backend/migrations
+sudo ln -s /opt/urbantrends-projects/onboarding-kit /opt/onboardkit
+cd /opt/onboardkit
 cp ops/.env.example ops/.env  # then fill in real secrets (never commit ops/.env)
 cd ops
+
+# In ops/.env, set the image coordinates (the compose defaults are placeholders):
+#   GHCR_REPO=urbantrendsorganization-production/urbantrends-projects
+#   IMAGE_TAG=main
+# plus real JWT_SECRET, POSTGRES_PASSWORD, and S3_* (Hetzner Object Storage).
 
 # Log in to GHCR to pull the private image (PAT with read:packages).
 echo "$GHCR_PAT" | docker login ghcr.io -u <user> --password-stdin
@@ -36,11 +49,11 @@ docker compose -f docker-compose.prod.yml --env-file .env up -d
 Migrations run automatically at api/worker startup (`sqlx::migrate!` embedded),
 so a fresh database self-provisions on boot.
 
-Seed the demo tenant (optional, demo box only):
+Seed the demo tenant (optional, demo box only). The `seed` binary ships in the
+image (built alongside `api`/`worker`); it is idempotent and never runs on boot:
 
 ```bash
-docker compose -f docker-compose.prod.yml run --rm api seed   # if seed bin is shipped
-# or run `cargo run -p onboardkit-db --bin seed` against DATABASE_URL
+docker compose -f docker-compose.prod.yml --env-file .env run --rm api seed
 ```
 
 ## Updates (CD)
