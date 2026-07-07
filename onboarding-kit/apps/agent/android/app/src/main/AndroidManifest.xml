@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Required in the release build: the debug/profile manifests declare this
-         for dev, but only the main manifest merges into a --release APK. Without
+         for dev, but only the main manifest merges into a release APK. Without
          it every API call fails silently on a real device. -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <application
