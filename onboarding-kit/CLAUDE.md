@@ -217,7 +217,7 @@ No Redis, no Celery. Postgres-backed queue:
 
 - Multi-stage Docker: cargo-chef planner/builder → debian-slim runtime. Two services from one image: `api` and `jobs`. Compose also runs postgres, minio (dev only).
 - CI: GitHub Actions — fmt, clippy (-D warnings), test, sqlx offline check (`cargo sqlx prepare` committed), build, push to GHCR on main.
-- Prod: `/srv/urbantrends/onboardkit/` on the Hetzner box, Caddy vhost `onboardkit.urbantrends.dev` (reverse proxy to api), Postgres backup cron into the existing `/srv/urbantrends/backups` pattern.
+- Prod: `/opt/onboardkit/` on the Hetzner box (one dir per stack under `/opt`). A shared **host-level** Caddy (not a per-stack container) fronts every stack; add an `onboardkit.urbantrends.dev` vhost that reverse-proxies to the api on `127.0.0.1:8086`. Postgres backup cron into `/opt/backups`.
 - Env vars documented in `ops/.env.example` — keep it exhaustive and current.
 
 ## 15. Seed / demo data (`ops/seed`)

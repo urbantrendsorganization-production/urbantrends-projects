@@ -2,11 +2,11 @@
 # OnboardKit Postgres backup (CLAUDE.md §14).
 # Dumps the database into the shared UrbanTrends backup dir and prunes old files.
 # Install as a daily cron on the Hetzner box, e.g.:
-#   0 3 * * *  /srv/urbantrends/onboardkit/ops/backup.sh >> /var/log/onboardkit-backup.log 2>&1
+#   0 3 * * *  /opt/onboardkit/ops/backup.sh >> /var/log/onboardkit-backup.log 2>&1
 set -euo pipefail
 
-BACKUP_DIR="${BACKUP_DIR:-/srv/urbantrends/backups}"
-COMPOSE_DIR="${COMPOSE_DIR:-/srv/urbantrends/onboardkit}"
+BACKUP_DIR="${BACKUP_DIR:-/opt/backups}"
+COMPOSE_DIR="${COMPOSE_DIR:-/opt/onboardkit}"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
 DB_SERVICE="${DB_SERVICE:-postgres}"
 

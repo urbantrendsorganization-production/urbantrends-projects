@@ -1,15 +1,27 @@
 # OnboardKit — Deployment (CLAUDE.md §14)
 
-Prod runs on the Hetzner box at `/srv/urbantrends/onboardkit/`, behind Caddy at
-`onboardkit.urbantrends.dev`. Two services (`api`, `worker`) run from a single
-GHCR image; Postgres is a compose service; object storage is Hetzner Object
-Storage (S3-compatible). No MinIO in prod.
+Prod runs on the Hetzner box at `/opt/onboardkit/` (alongside the other stacks
+in `/opt`: sitechat, rentflow, urbantrends). Two services
+(`api`, `worker`) run from a single GHCR image; Postgres is a compose service;
+object storage is Hetzner Object Storage (S3-compatible). No MinIO in prod.
+
+TLS/routing is handled by the **shared host-level Caddy** that already fronts the
+other UrbanTrends stacks (sitechat, rentflow, urbantrends) — this stack does not
+run its own Caddy. The api publishes on `127.0.0.1:8086` (loopback only, like
+every other app on the box); the host Caddyfile proxies
+`onboardkit.urbantrends.dev` → `127.0.0.1:8086`. Add the vhost once:
+
+```bash
+# Append ops/Caddyfile's block to the host Caddyfile, then:
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+```
 
 ## First deploy
 
 ```bash
 ssh hetzner
-mkdir -p /srv/urbantrends/onboardkit && cd /srv/urbantrends/onboardkit
+mkdir -p /opt/onboardkit && cd /opt/onboardkit
 git clone <repo> .            # or copy ops/ + backend/migrations
 cp ops/.env.example ops/.env  # then fill in real secrets (never commit ops/.env)
 cd ops
@@ -37,7 +49,7 @@ CI builds and pushes `ghcr.io/<repo>/backend:latest` (and a `sha-…` tag) on
 every push to `main`. To roll forward:
 
 ```bash
-cd /srv/urbantrends/onboardkit/ops
+cd /opt/onboardkit/ops
 docker compose -f docker-compose.prod.yml --env-file .env pull
 docker compose -f docker-compose.prod.yml --env-file .env up -d
 ```
@@ -47,11 +59,11 @@ set it to a previous sha and `up -d` again.
 
 ## Backups
 
-`ops/backup.sh` dumps Postgres into `/srv/urbantrends/backups` (gzip) and prunes
+`ops/backup.sh` dumps Postgres into `/opt/backups` (gzip) and prunes
 past the retention window. Install as a daily cron:
 
 ```cron
-0 3 * * *  /srv/urbantrends/onboardkit/ops/backup.sh >> /var/log/onboardkit-backup.log 2>&1
+0 3 * * *  /opt/onboardkit/ops/backup.sh >> /var/log/onboardkit-backup.log 2>&1
 ```
 
 ## Mobile app (agent APK / Play Store)
@@ -70,6 +82,33 @@ flutter build appbundle --release \
 ```
 
 For a sideloadable demo APK, swap `appbundle` for `apk`.
+
+### Publish the APK for download over the website
+
+The host Caddy serves a public download page + APK from `/opt/onboardkit/public/`
+(see the `/download` block in `ops/Caddyfile`). To publish a build:
+
+```bash
+# On the build machine — produce the signed APK (see signing setup below).
+cd apps/agent
+flutter build apk --release \
+  --dart-define=API_BASE_URL=https://onboardkit.urbantrends.dev \
+  --dart-define=CONSENT_TERMS_VERSION=v1
+
+# Copy the page (once) and the APK (each release) to the server.
+scp ops/public/index.html  hetzner:/opt/onboardkit/public/index.html
+scp apps/agent/build/app/outputs/flutter-apk/app-release.apk \
+    hetzner:/opt/onboardkit/public/onboardkit-agent.apk
+```
+
+The APK is a release artifact and is gitignored (`ops/public/.gitignore`); only
+`index.html` is tracked. Once the files are in place:
+
+- Download page: `https://onboardkit.urbantrends.dev/download`
+- Direct link:   `https://onboardkit.urbantrends.dev/download/onboardkit-agent.apk`
+
+No Caddy reload is needed to swap the APK — `file_server` picks up the new file
+immediately. (Reload Caddy only when you first add the `/download` block.)
 
 `CONSENT_TERMS_VERSION` must equal the server value (`ops/.env`) or the consent
 endpoint rejects submissions. Bump `version:` in `apps/agent/pubspec.yaml`

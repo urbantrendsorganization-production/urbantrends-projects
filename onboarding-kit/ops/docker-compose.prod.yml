@@ -1,12 +1,19 @@
 # OnboardKit production stack (CLAUDE.md §14).
-#   Deploy to /srv/urbantrends/onboardkit/ on the Hetzner box.
+#   Deploy to /opt/onboardkit/ on the Hetzner box (alongside the other stacks).
 #   docker compose -f docker-compose.prod.yml --env-file .env up -d
+#
+# TLS/routing is handled by the shared host-level Caddy that already fronts the
+# other UrbanTrends stacks (sitechat, rentflow, urbantrends). This stack does NOT
+# run its own Caddy — that would collide on :80/:443. Instead the api publishes
+# on 127.0.0.1:8086 (loopback only, like every other app here) and the host
+# Caddyfile reverse-proxies onboardkit.urbantrends.dev → 127.0.0.1:8086.
+# See ops/Caddyfile for the vhost snippet to add.
 #
 # Differences from the dev stack (ops/docker-compose.yml):
 #   - Pulls the prebuilt image from GHCR instead of building locally.
 #   - No MinIO: prod uses Hetzner Object Storage (S3_ENDPOINT points at it).
-#   - Only Caddy is exposed to the internet; api/postgres stay on the internal
-#     network. Caddy terminates TLS for onboardkit.urbantrends.dev.
+#   - No Caddy service; api bound to loopback, fronted by the host Caddy.
+#   - postgres stays on the internal compose network (no published port).
 #   - Everything restarts unless-stopped.
 
 name: onboardkit
@@ -58,6 +65,9 @@ services:
     image: ghcr.io/${GHCR_REPO:-urbantrends/onboardkit}/backend:${IMAGE_TAG:-latest}
     restart: unless-stopped
     command: ["api"]
+    # Loopback-only, fronted by the shared host Caddy (see file header).
+    ports:
+      - "127.0.0.1:8086:8080"
     environment:
       <<: *backend-env
       API_HOST: 0.0.0.0
@@ -82,20 +92,5 @@ services:
       postgres:
         condition: service_healthy
 
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    depends_on:
-      - api
-
 volumes:
   postgres-data:
-  caddy-data:
-  caddy-config:

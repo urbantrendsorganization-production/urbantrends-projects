@@ -1,14 +1,39 @@
-# OnboardKit reverse proxy (CLAUDE.md §14).
-# Caddy terminates TLS (auto Let's Encrypt) and proxies to the api service.
-# The office Next.js app is deployed separately; this vhost is the API only.
+# OnboardKit reverse proxy — vhost SNIPPET for the shared HOST Caddy
+# (CLAUDE.md §14).
+#
+# Caddy runs on the host and already fronts the other UrbanTrends stacks; this
+# stack does NOT run its own Caddy. Append this block to the host Caddyfile
+# (e.g. /etc/caddy/Caddyfile), then `sudo systemctl reload caddy`.
+#
+# The OnboardKit api is published on 127.0.0.1:8086 by docker-compose.prod.yml.
+# Caddy terminates TLS (auto Let's Encrypt) and proxies to it. KYC documents are
+# never proxied through here; clients fetch them via short-lived presigned S3
+# URLs (§11).
 
 onboardkit.urbantrends.dev {
 	encode gzip
 
-	# API — the only publicly reachable backend surface. KYC documents are
-	# never proxied through here; clients fetch them via short-lived presigned
-	# S3 URLs (§11).
-	reverse_proxy api:8080
+	# Public download of the Android agent APK (demo/pilot). Served as a static
+	# file straight from disk — NOT through the API. Drop the signed APK and the
+	# download page at /opt/onboardkit/public/ (see ops/public/ + DEPLOY.md):
+	#   /download                     -> download landing page (index.html)
+	#   /download/onboardkit-agent.apk -> the APK itself
+	# The APK is login-gated (field-agent credentials), so a public link is fine.
+	@download path /download /download/*
+	handle @download {
+		root * /opt/onboardkit/public
+		uri strip_prefix /download
+		# Correct MIME + force a download rather than in-browser handling.
+		@apk path *.apk
+		header @apk Content-Type application/vnd.android.package-archive
+		header @apk Content-Disposition attachment
+		file_server
+	}
+
+	# Everything else is the API — the only publicly reachable backend surface.
+	handle {
+		reverse_proxy 127.0.0.1:8086
+	}
 
 	log {
 		output stdout
