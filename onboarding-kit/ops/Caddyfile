@@ -2,8 +2,10 @@
 # (CLAUDE.md §14).
 #
 # Caddy runs on the host and already fronts the other UrbanTrends stacks; this
-# stack does NOT run its own Caddy. Append this block to the host Caddyfile
-# (e.g. /etc/caddy/Caddyfile), then `sudo systemctl reload caddy`.
+# stack does NOT run its own Caddy. The host Caddy loads per-service blocks via
+# `import /etc/caddy/conf.d/*.caddy`, so install this as a drop-in:
+#   sudo cp ops/Caddyfile /etc/caddy/conf.d/onboardkit.caddy
+#   sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
 #
 # The OnboardKit api is published on 127.0.0.1:8086 by docker-compose.prod.yml.
 # Caddy terminates TLS (auto Let's Encrypt) and proxies to it. KYC documents are
@@ -21,7 +23,7 @@ onboardkit.urbantrends.dev {
 	# The APK is login-gated (field-agent credentials), so a public link is fine.
 	@download path /download /download/*
 	handle @download {
-		root * /opt/onboardkit/public
+		root * /opt/onboardkit/ops/public
 		uri strip_prefix /download
 		# Correct MIME + force a download rather than in-browser handling.
 		@apk path *.apk
