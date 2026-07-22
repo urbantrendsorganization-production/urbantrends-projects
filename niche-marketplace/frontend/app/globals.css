@@ -1,0 +1,14 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand: #2563eb;
+  --color-brand-dark: #1d4ed8;
+}
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  @apply bg-neutral-50 text-neutral-900 antialiased;
+}
