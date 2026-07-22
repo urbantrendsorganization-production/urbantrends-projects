@@ -61,8 +61,10 @@ services:
       # Keep the image's node_modules; don't let the bind mount shadow it.
       - /app/node_modules
     environment:
-      # Server components fetch the API over the compose network.
+      # Server components fetch the API over the compose network...
       API_URL: http://backend:8000
+      # ...while browser (client) requests use the host-published port.
+      NEXT_PUBLIC_API_URL: http://localhost:8000
       NEXT_TELEMETRY_DISABLED: "1"
       WATCHPACK_POLLING: "true"
     ports:
