@@ -8,6 +8,9 @@ djangorestframework-simplejwt==5.4.0
 psycopg[binary]==3.2.4
 redis==5.2.1
 
+# Media (avatar uploads)
+Pillow==11.1.0
+
 # Async tasks
 celery==5.4.0
 

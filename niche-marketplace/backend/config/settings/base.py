@@ -5,6 +5,7 @@ Environment-specific modules (``dev``, ``prod``) import ``*`` from here and
 override only what differs. Anything that reads from the environment is wired
 through ``django-environ`` so the same image behaves differently per deploy.
 """
+from datetime import timedelta
 from pathlib import Path
 
 import environ
@@ -37,6 +38,7 @@ DJANGO_APPS = [
 
 THIRD_PARTY_APPS = [
     "rest_framework",
+    "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
 ]
 
@@ -130,6 +132,23 @@ REST_FRAMEWORK = {
     # Consistent error envelope: {"detail": ..., "code": ...}
     "EXCEPTION_HANDLER": "apps.core.exceptions.envelope_exception_handler",
 }
+
+# JWT ------------------------------------------------------------------------
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    # Rotate refresh tokens and blacklist the old one on every refresh.
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "UPDATE_LAST_LOGIN": True,
+}
+
+# Email / verification -------------------------------------------------------
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="no-reply@marketplace.local")
+# Public base URL of the frontend; verification links point here.
+FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:3000")
+# How long a verification link stays valid, in seconds (default 24h).
+EMAIL_VERIFICATION_TIMEOUT = env.int("EMAIL_VERIFICATION_TIMEOUT", default=60 * 60 * 24)
 
 # I18N / TZ ------------------------------------------------------------------
 LANGUAGE_CODE = "en-us"

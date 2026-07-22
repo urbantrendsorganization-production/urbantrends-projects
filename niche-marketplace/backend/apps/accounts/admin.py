@@ -14,7 +14,7 @@ class UserAdmin(BaseUserAdmin):
 
     fieldsets = (
         (None, {"fields": ("email", "password")}),
-        ("Contact", {"fields": ("phone",)}),
+        ("Profile", {"fields": ("display_name", "avatar", "location", "phone")}),
         ("Status", {"fields": ("is_verified",)}),
         (
             "Permissions",
