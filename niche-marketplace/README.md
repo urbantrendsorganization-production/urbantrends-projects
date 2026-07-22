@@ -52,7 +52,12 @@ npm run build
 
 ## Project phases
 
-Built in phases (see `CLAUDE.md`). **Phase 0 — Skeleton** is complete:
-monorepo layout, split Django settings, custom email-as-username User model,
-Tailwind-configured Next.js app, the four-service compose stack, CI, and a
-healthcheck at `/api/v1/health/` rendered by the frontend home page.
+Built in phases (see `CLAUDE.md`).
+
+- **Phase 0 — Skeleton** ✅ monorepo layout, split Django settings, custom
+  email-as-username User model, Tailwind Next.js app, four-service compose
+  stack, CI, and a healthcheck at `/api/v1/health/` rendered by the frontend.
+- **Phase 1 — Auth & profiles** ✅ JWT auth (login/refresh with rotation),
+  registration with signed expiring email-verification links (+ resend),
+  editable profiles with avatar upload, and public profile pages. An
+  `IsVerified` permission is ready to gate listing creation in Phase 2.
