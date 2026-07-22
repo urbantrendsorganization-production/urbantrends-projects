@@ -11,8 +11,10 @@
 #
 # Differences from the dev stack (ops/docker-compose.yml):
 #   - Pulls the prebuilt image from GHCR instead of building locally.
-#   - No MinIO: prod uses Hetzner Object Storage (S3_ENDPOINT points at it).
-#   - No Caddy service; api bound to loopback, fronted by the host Caddy.
+#   - Self-hosted MinIO (object storage) runs here too, published on loopback and
+#     fronted by the host Caddy at https://${S3_PUBLIC_HOST} (see ops/Caddyfile).
+#     S3_ENDPOINT must be that PUBLIC url — the api hands clients presigned URLs.
+#   - No Caddy service; api/minio bound to loopback, fronted by the host Caddy.
 #   - postgres stays on the internal compose network (no published port).
 #   - Everything restarts unless-stopped.
 
@@ -26,7 +28,7 @@ x-backend-env: &backend-env
   JWT_SECRET: ${JWT_SECRET:?set a strong JWT_SECRET in .env}
   JWT_ACCESS_TTL_SECS: ${JWT_ACCESS_TTL_SECS:-900}
   JWT_REFRESH_TTL_SECS: ${JWT_REFRESH_TTL_SECS:-1209600}
-  S3_ENDPOINT: ${S3_ENDPOINT:?set the Hetzner Object Storage endpoint}
+  S3_ENDPOINT: ${S3_ENDPOINT:?set S3_ENDPOINT to the public https url (https://${S3_PUBLIC_HOST})}
   S3_REGION: ${S3_REGION}
   S3_BUCKET: ${S3_BUCKET}
   S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
@@ -61,6 +63,30 @@ services:
       timeout: 5s
       retries: 10
 
+  # Self-hosted S3-compatible object storage (§11). Published on loopback only;
+  # the host Caddy reverse-proxies https://${S3_PUBLIC_HOST} -> 127.0.0.1:9000
+  # (path-style, so no wildcard cert). The bucket is private — only short-lived
+  # presigned URLs are ever valid. Console is loopback-only (SSH tunnel).
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID in .env}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY in .env}
+      # Tells MinIO its public URL (TLS terminated by the host Caddy).
+      MINIO_SERVER_URL: ${S3_ENDPOINT}
+    ports:
+      - "127.0.0.1:9000:9000"   # S3 API — fronted by host Caddy
+      - "127.0.0.1:9091:9001"   # console — SSH-tunnel only, never public
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   api:
     image: ghcr.io/${GHCR_REPO:-urbantrends/onboardkit}/backend:${IMAGE_TAG:-latest}
     restart: unless-stopped
@@ -72,8 +98,14 @@ services:
       <<: *backend-env
       API_HOST: 0.0.0.0
       API_PORT: 8080
+    # Reach the public S3 host via the host Caddy (its TLS cert) instead of
+    # hairpinning off the public IP, which Docker typically cannot do.
+    extra_hosts:
+      - "${S3_PUBLIC_HOST:?set S3_PUBLIC_HOST (bare hostname of S3_ENDPOINT)}:host-gateway"
     depends_on:
       postgres:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/v1/health"]
@@ -88,9 +120,14 @@ services:
     command: ["worker"]
     environment:
       <<: *backend-env
+    extra_hosts:
+      - "${S3_PUBLIC_HOST:?set S3_PUBLIC_HOST (bare hostname of S3_ENDPOINT)}:host-gateway"
     depends_on:
       postgres:
+        condition: service_healthy
+      minio:
         condition: service_healthy
 
 volumes:
   postgres-data:
+  minio-data:

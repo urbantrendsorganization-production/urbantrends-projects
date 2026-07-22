@@ -1,19 +1,27 @@
 # OnboardKit — Deployment (CLAUDE.md §14)
 
 Prod runs on the Hetzner box at `/opt/onboardkit/` (alongside the other stacks
-in `/opt`: sitechat, rentflow, urbantrends). Two services
-(`api`, `worker`) run from a single GHCR image; Postgres is a compose service;
-object storage is Hetzner Object Storage (S3-compatible). No MinIO in prod.
+in `/opt`: sitechat, rentflow, urbantrends). Two services (`api`, `worker`) run
+from a single GHCR image; Postgres and **self-hosted MinIO** (S3-compatible
+object storage) are compose services — no third-party object store.
 
 TLS/routing is handled by the **shared host-level Caddy** that already fronts the
 other UrbanTrends stacks (sitechat, rentflow, urbantrends) — this stack does not
-run its own Caddy. The api publishes on `127.0.0.1:8086` (loopback only, like
-every other app on the box); Caddy proxies `onboardkit.urbantrends.dev` →
-`127.0.0.1:8086`.
+run its own Caddy. Both the api and MinIO publish on loopback and are proxied by
+the host Caddy:
+- `onboardkit.urbantrends.dev` → `127.0.0.1:8086` (api)
+- `s3.onboardkit.urbantrends.dev` → `127.0.0.1:9000` (MinIO S3 API)
+
+The api/jobs containers reach `s3.onboardkit.urbantrends.dev` through the host
+Caddy via a `host-gateway` mapping (`S3_PUBLIC_HOST` in `.env`), so `S3_ENDPOINT`
+is the single public URL used for both server-side ops and the presigned URLs
+handed to clients. MinIO's console is loopback-only (`127.0.0.1:9091`) — reach it
+with an SSH tunnel (`ssh -L 9091:127.0.0.1:9091 hetzner`), never expose it.
 
 The host Caddy loads per-service blocks via `import /etc/caddy/conf.d/*.caddy`,
 so OnboardKit's vhost is a drop-in there (contents in `ops/Caddyfile`). Add it
-once — needs a DNS `A` record for `onboardkit.urbantrends.dev` → this box:
+once — needs DNS `A` records for **both** `onboardkit.urbantrends.dev` and
+`s3.onboardkit.urbantrends.dev` → this box:
 
 ```bash
 sudo cp ops/Caddyfile /etc/caddy/conf.d/onboardkit.caddy
@@ -37,7 +45,12 @@ cd ops
 # In ops/.env, set the image coordinates (the compose defaults are placeholders):
 #   GHCR_REPO=urbantrendsorganization-production/urbantrends-projects
 #   IMAGE_TAG=main
-# plus real JWT_SECRET, POSTGRES_PASSWORD, and S3_* (Hetzner Object Storage).
+# plus real JWT_SECRET and POSTGRES_PASSWORD. For object storage (self-hosted
+# MinIO) set:
+#   S3_ENDPOINT=https://s3.onboardkit.urbantrends.dev
+#   S3_PUBLIC_HOST=s3.onboardkit.urbantrends.dev
+#   S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY   # become the MinIO root credentials
+#   S3_BUCKET=onboardkit   S3_FORCE_PATH_STYLE=true
 
 # Log in to GHCR to pull the private image (PAT with read:packages).
 echo "$GHCR_PAT" | docker login ghcr.io -u <user> --password-stdin
@@ -72,8 +85,11 @@ set it to a previous sha and `up -d` again.
 
 ## Backups
 
-`ops/backup.sh` dumps Postgres into `/opt/backups` (gzip) and prunes
-past the retention window. Install as a daily cron:
+`ops/backup.sh` backs up both **Postgres** (gzip `pg_dump`) and the **MinIO data
+volume** (KYC documents, tar.gz) into `/opt/backups`, then prunes past the
+retention window (`RETENTION_DAYS`, default 14). The MinIO archive is a hot tar of
+the `onboardkit_minio-data` volume; restore instructions are in the script
+header. Install as a daily cron:
 
 ```cron
 0 3 * * *  /opt/onboardkit/ops/backup.sh >> /var/log/onboardkit-backup.log 2>&1

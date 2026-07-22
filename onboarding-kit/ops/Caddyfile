@@ -42,3 +42,19 @@ onboardkit.urbantrends.dev {
 		format console
 	}
 }
+
+# Self-hosted MinIO object storage (§11). docker-compose.prod.yml publishes the
+# S3 API on 127.0.0.1:9000; this vhost terminates TLS and reverse-proxies to it.
+# Path-style addressing means this single-host cert is enough (no wildcard).
+# The bucket is PRIVATE — only short-lived presigned PUT/GET URLs are ever valid
+# here, so exposing this host is safe. Needs a DNS A record:
+#   s3.onboardkit.urbantrends.dev -> this box
+# (No `encode` — object bytes are already-compressed images / binary.)
+s3.onboardkit.urbantrends.dev {
+	reverse_proxy 127.0.0.1:9000
+
+	log {
+		output stdout
+		format console
+	}
+}

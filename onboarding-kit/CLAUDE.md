@@ -177,7 +177,7 @@ No Redis, no Celery. Postgres-backed queue:
 
 ## 11. Object storage
 
-- S3-compatible: MinIO in dev (compose service), Hetzner Object Storage in prod. `aws-sdk-s3` with custom endpoint.
+- S3-compatible: **self-hosted MinIO in both dev and prod** (compose service). `aws-sdk-s3` with custom endpoint. In prod MinIO is published on loopback and fronted by the host Caddy at `https://s3.<domain>`; `S3_ENDPOINT` is that public URL so presigned URLs are client-reachable. Path-style addressing (single-host cert). See §14 and the Decisions log.
 - Uploads: presigned PUT, 10-minute expiry, content-type and max size (10MB) constrained in the presign.
 - Reads: presigned GET, 5-minute expiry. **No KYC document is ever publicly accessible or served through the API as a proxy stream.**
 - Server-side validation on confirm: verify object exists, size, and sniff MIME (magic bytes, not extension). Reject non-image for photo doc types (PDF allowed for address_proof).
@@ -215,9 +215,9 @@ No Redis, no Celery. Postgres-backed queue:
 
 ## 14. Deployment
 
-- Multi-stage Docker: cargo-chef planner/builder → debian-slim runtime. Two services from one image: `api` and `jobs`. Compose also runs postgres, minio (dev only).
+- Multi-stage Docker: cargo-chef planner/builder → debian-slim runtime. Two services from one image: `api` and `jobs`. Compose also runs postgres and minio (both dev and prod).
 - CI: GitHub Actions — fmt, clippy (-D warnings), test, sqlx offline check (`cargo sqlx prepare` committed), build, push to GHCR on main.
-- Prod: `/opt/onboardkit/` on the Hetzner box (one dir per stack under `/opt`). A shared **host-level** Caddy (not a per-stack container) fronts every stack; add an `onboardkit.urbantrends.dev` vhost that reverse-proxies to the api on `127.0.0.1:8086`. Postgres backup cron into `/opt/backups`.
+- Prod: `/opt/onboardkit/` on the Hetzner box (one dir per stack under `/opt`). A shared **host-level** Caddy (not a per-stack container) fronts every stack; add an `onboardkit.urbantrends.dev` vhost reverse-proxying the api on `127.0.0.1:8086`, and an `s3.onboardkit.urbantrends.dev` vhost reverse-proxying MinIO on `127.0.0.1:9000` (both DNS A records required). Postgres backup cron into `/opt/backups`.
 - Env vars documented in `ops/.env.example` — keep it exhaustive and current.
 
 ## 15. Seed / demo data (`ops/seed`)
@@ -260,3 +260,24 @@ Demo tenant **"Jubilant Microfinance"**: 3 branches (Kilimani, Thika, Nakuru), 1
   appear in the mobile app. `AppConfig.products` in the Flutter app is retained
   only as an offline fallback. Handler: `routes/admin.rs::list_products`
   (extractor `AuthUser`, not `RequireAdmin`).
+
+- **Prod object storage is self-hosted MinIO, not a third-party S3 service.**
+  Runs as a compose service on the box (data on the `minio-data` volume),
+  published on `127.0.0.1:9000`, fronted by the shared host Caddy at
+  `https://s3.onboardkit.urbantrends.dev`. Rationale: keep KYC documents on our
+  own server/domain (no external processor, simpler data-protection story) and
+  drop a hard-to-diagnose managed dependency (the earlier Hetzner Object Storage
+  setup failed every write with an opaque "unhandled error").
+  - **Single public endpoint** for both server-side ops and presigned URLs:
+    `S3_ENDPOINT` is the public `https://s3.<domain>`. Required because the api
+    hands presigned PUT/GET URLs directly to the Flutter/office clients, so the
+    signed host must be publicly reachable. No code change (still one
+    `aws-sdk-s3` client / `ObjectStore`).
+  - **Path-style** (`S3_FORCE_PATH_STYLE=true`) so a single-host TLS cert is
+    enough — no per-bucket subdomain / wildcard.
+  - The `api`/`jobs` containers reach that host via `extra_hosts:
+    <host>:host-gateway` (env `S3_PUBLIC_HOST`), routing through the host Caddy's
+    TLS rather than hairpinning off the public IP (which Docker can't do
+    reliably). MinIO console stays loopback-only (`127.0.0.1:9091`, SSH tunnel).
+  - Backups: `backup.sh` covers both Postgres (`pg_dump`) and the MinIO data
+    volume (hot tar of `onboardkit_minio-data`), pruned by `RETENTION_DAYS`.
