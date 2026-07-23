@@ -40,6 +40,41 @@ export function TextInput({ className = "", ...props }: ComponentProps<"input">)
   );
 }
 
+export function Textarea({ className = "", ...props }: ComponentProps<"textarea">) {
+  return (
+    <textarea
+      className={`w-full rounded-xl border border-neutral-300 bg-white px-3.5 py-2.5 text-sm outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/20 ${className}`}
+      {...props}
+    />
+  );
+}
+
+export function Select({ className = "", ...props }: ComponentProps<"select">) {
+  return (
+    <select
+      className={`h-11 w-full rounded-xl border border-neutral-300 bg-white px-3 text-sm outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/20 ${className}`}
+      {...props}
+    />
+  );
+}
+
+const STATUS_STYLES: Record<string, string> = {
+  draft: "bg-neutral-100 text-neutral-600",
+  active: "bg-green-100 text-green-700",
+  reserved: "bg-amber-100 text-amber-700",
+  sold: "bg-blue-100 text-blue-700",
+  expired: "bg-red-100 text-red-700",
+};
+
+export function StatusBadge({ status }: { status: string }) {
+  const style = STATUS_STYLES[status] ?? "bg-neutral-100 text-neutral-600";
+  return (
+    <span className={`rounded-full px-2.5 py-1 text-xs font-medium capitalize ${style}`}>
+      {status}
+    </span>
+  );
+}
+
 export function Alert({
   tone = "error",
   children,

@@ -20,6 +20,15 @@ export function SiteHeader() {
           <nav className="flex items-center gap-4 text-sm">
             {loading ? null : isAuthenticated ? (
               <>
+                <Link href="/sell" className="font-medium text-neutral-700 hover:text-brand">
+                  Sell
+                </Link>
+                <Link
+                  href="/my-listings"
+                  className="hidden font-medium text-neutral-700 hover:text-brand sm:inline"
+                >
+                  My listings
+                </Link>
                 <Link href="/profile" className="font-medium text-neutral-700 hover:text-brand">
                   {user?.display_name || "Profile"}
                 </Link>
