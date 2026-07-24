@@ -18,6 +18,7 @@ npm-debug.log*
 
 # Env / secrets
 .env
+.env.prod
 *.local
 
 # Editor / OS

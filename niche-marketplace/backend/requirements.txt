@@ -16,6 +16,8 @@ celery==5.4.0
 
 # Prod server
 gunicorn==23.0.0
+# Serve hashed/compressed static files from the app (admin, DRF browsable API)
+whitenoise==6.8.2
 
 # Config
 django-environ==0.12.0

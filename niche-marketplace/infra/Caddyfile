@@ -1,0 +1,15 @@
+# Caddy fronts the API with automatic HTTPS (Let's Encrypt). DNS for
+# marketplace.urbantrends.dev must point at this box, with ports 80 + 443 open.
+marketplace.urbantrends.dev {
+	encode zstd gzip
+
+	# User-uploaded media is served directly from the shared volume — fast,
+	# and it keeps large files off the Python workers.
+	handle_path /media/* {
+		root * /srv/media
+		file_server
+	}
+
+	# Everything else (API, admin, WhiteNoise static) goes to Django.
+	reverse_proxy backend:8000
+}

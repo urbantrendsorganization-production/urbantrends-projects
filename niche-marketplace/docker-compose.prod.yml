@@ -1,0 +1,81 @@
+name: marketplace-prod
+
+# Production stack for the box (Hetzner/VPS). The frontend is deployed
+# separately on Vercel, so there is no frontend service here — Caddy fronts the
+# API on marketplace.urbantrends.dev with automatic TLS.
+#
+# Deploy:
+#   docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    env_file: .env.prod
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-marketplace}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    # Migrate, collect static for WhiteNoise, then serve with gunicorn.
+    command: >-
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py collectstatic --noinput &&
+             gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3"
+    env_file: .env.prod
+    volumes:
+      - mediafiles:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    command: celery -A config worker -l info
+    env_file: .env.prod
+    volumes:
+      # Shares media with the backend so thumbnails land where Caddy serves them.
+      - mediafiles:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - mediafiles:/srv/media:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  mediafiles:
+  caddy_data:
+  caddy_config:
