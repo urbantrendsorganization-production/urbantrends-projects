@@ -145,7 +145,36 @@ SIMPLE_JWT = {
 }
 
 # Email / verification -------------------------------------------------------
-DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="no-reply@marketplace.local")
+# Transactional email (verification links) is sent through Django's email
+# backend. We deliver via Resend over SMTP: the username is the literal string
+# "resend" and the password is the Resend API key. Defaults point at Resend so
+# the only secret needed is RESEND_API_KEY.
+RESEND_API_KEY = env("RESEND_API_KEY", default="")
+
+EMAIL_HOST = env("EMAIL_HOST", default="smtp.resend.com")
+EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="resend")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default=RESEND_API_KEY)
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
+
+# Use real SMTP delivery whenever an API key is configured; otherwise fall back
+# to the console backend so dev works offline. prod.py forces SMTP regardless.
+EMAIL_BACKEND = env(
+    "EMAIL_BACKEND",
+    default=(
+        "django.core.mail.backends.smtp.EmailBackend"
+        if RESEND_API_KEY
+        else "django.core.mail.backends.console.EmailBackend"
+    ),
+)
+
+# From address — must be a Resend-verified sender. Accepts a bare address or
+# "Name <addr>". EMAIL_NAME is an accepted alias for DEFAULT_FROM_EMAIL.
+DEFAULT_FROM_EMAIL = env(
+    "DEFAULT_FROM_EMAIL",
+    default=env("EMAIL_NAME", default="no-reply@marketplace.local"),
+)
+
 # Public base URL of the frontend; verification links point here.
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:3000")
 # How long a verification link stays valid, in seconds (default 24h).

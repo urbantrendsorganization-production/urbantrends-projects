@@ -7,14 +7,9 @@ DEBUG = False
 # Must be provided explicitly in prod — no wildcard fallback.
 ALLOWED_HOSTS = env("DJANGO_ALLOWED_HOSTS")
 
-# SMTP behind an interface; credentials come from the environment.
+# Email is always delivered over SMTP (Resend) in production — never the
+# console. Host, credentials and From address are env-driven in base.py.
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_HOST = env("EMAIL_HOST", default="")
-EMAIL_PORT = env.int("EMAIL_PORT", default=587)
-EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
-EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
-EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
-DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="no-reply@marketplace.local")
 
 # Security — TLS is terminated at Caddy, which sets X-Forwarded-Proto.
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")

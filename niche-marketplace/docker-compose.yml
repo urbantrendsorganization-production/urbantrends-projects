@@ -44,6 +44,10 @@ services:
       POSTGRES_PORT: "5432"
       REDIS_URL: redis://redis:6379/0
       CORS_ALLOWED_ORIGINS: http://localhost:3000
+      # Resend transactional email (from root .env). Without a key, Django
+      # falls back to the console backend and prints verification links.
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      DEFAULT_FROM_EMAIL: ${EMAIL_NAME:-no-reply@marketplace.local}
     ports:
       - "8000:8000"
     depends_on:
@@ -68,6 +72,8 @@ services:
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"
       REDIS_URL: redis://redis:6379/0
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      DEFAULT_FROM_EMAIL: ${EMAIL_NAME:-no-reply@marketplace.local}
     depends_on:
       db:
         condition: service_healthy
