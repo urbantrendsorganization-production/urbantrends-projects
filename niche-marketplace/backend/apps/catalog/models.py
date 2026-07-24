@@ -5,9 +5,15 @@ Business rules (level limits, status transitions, attribute validation) live in
 soft-delete; categories and images hard-delete per project convention.
 """
 from django.conf import settings
+from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.search import SearchVectorField
 from django.db import models
 
 from apps.core.models import TimeStampedModel
+
+# Full-text search configuration used everywhere the search vector is built or
+# queried, so indexing and querying always agree.
+SEARCH_CONFIG = "english"
 
 
 class Category(TimeStampedModel):
@@ -117,8 +123,16 @@ class ListingQuerySet(models.QuerySet):
         return self.alive().filter(status=ListingStatus.ACTIVE)
 
     def with_related(self) -> "ListingQuerySet":
-        """Prefetch everything a serialized listing touches — no N+1."""
-        return self.select_related("seller", "category").prefetch_related("images")
+        """Prefetch everything a serialized listing touches — no N+1.
+
+        The category chain is pulled two levels up (``parent__parent``) because
+        serializing a listing computes its category's *effective* attribute
+        schema, which walks ancestors; with a 3-level tree that chain is fully
+        cached, so no per-listing parent lookups fire.
+        """
+        return self.select_related(
+            "seller", "category__parent__parent"
+        ).prefetch_related("images")
 
 
 class Listing(TimeStampedModel):
@@ -149,6 +163,10 @@ class Listing(TimeStampedModel):
     # Category-specific values, validated against category.effective_schema().
     attributes = models.JSONField(default=dict, blank=True)
 
+    # Denormalised full-text index over title + description, kept fresh by the
+    # service layer (see services.refresh_search_vector). Never edited directly.
+    search_vector = SearchVectorField(null=True, editable=False)
+
     # Soft delete — listings are user-facing.
     is_deleted = models.BooleanField(default=False)
     deleted_at = models.DateTimeField(null=True, blank=True)
@@ -164,6 +182,12 @@ class Listing(TimeStampedModel):
             models.Index(fields=["status", "-created_at"]),
             models.Index(fields=["category", "status"]),
             models.Index(fields=["seller", "-created_at"]),
+            # Sort the public directory by price without a table scan.
+            models.Index(fields=["status", "price"]),
+            # Full-text search over title + description.
+            GinIndex(fields=["search_vector"], name="listing_search_gin"),
+            # Containment queries on category-specific attributes (attr filters).
+            GinIndex(fields=["attributes"], name="listing_attrs_gin"),
         ]
 
     def __str__(self) -> str:

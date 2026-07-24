@@ -7,8 +7,9 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from apps.accounts.permissions import IsVerified
-from apps.catalog import services
+from apps.catalog import filters, services
 from apps.catalog.models import Category, Listing, ListingStatus
+from apps.catalog.pagination import ListingCursorPagination
 from apps.catalog.permissions import IsSellerOrReadOnly
 from apps.catalog.serializers import (
     CategorySerializer,
@@ -38,6 +39,7 @@ class ListingViewSet(viewsets.ModelViewSet):
     """
 
     lookup_value_regex = "[0-9]+"
+    pagination_class = ListingCursorPagination
 
     def get_serializer_class(self):
         if self.action in ("create", "update", "partial_update"):
@@ -67,6 +69,10 @@ class ListingViewSet(viewsets.ModelViewSet):
         seller = self.request.query_params.get("seller")
         if seller:
             qs = qs.filter(seller_id=seller)
+
+        # The public directory feed: apply keyword search and every facet.
+        if self.action == "list":
+            qs = filters.apply_filters(qs, self.request.query_params)
         return qs
 
     def get_object(self) -> Listing:

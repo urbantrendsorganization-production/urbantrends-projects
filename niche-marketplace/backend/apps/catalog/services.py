@@ -8,6 +8,7 @@ Two things are enforced in exactly one place, on purpose:
 * **Category-specific attributes** — ``validate_attributes`` checks a listing's
   free-form ``attributes`` against the effective schema of its category.
 """
+from django.contrib.postgres.search import SearchVector
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.utils import timezone
@@ -15,11 +16,34 @@ from rest_framework import status as http_status
 from rest_framework.exceptions import APIException, ValidationError
 
 from apps.catalog.models import (
+    SEARCH_CONFIG,
     Category,
     Listing,
     ListingImage,
     ListingStatus,
 )
+
+# ---------------------------------------------------------------------------
+# Full-text search index
+# ---------------------------------------------------------------------------
+
+# Title matches rank above description matches (weights A vs B).
+_SEARCH_VECTOR = SearchVector("title", weight="A", config=SEARCH_CONFIG) + SearchVector(
+    "description", weight="B", config=SEARCH_CONFIG
+)
+
+
+def refresh_search_vector(*listing_ids: int) -> None:
+    """Recompute the stored ``search_vector`` for the given listings.
+
+    Run as a single set-based UPDATE so it stays cheap whether called for one
+    listing after an edit or for thousands after a bulk seed. With no ids it
+    refreshes every listing (used by the backfill migration / seeder).
+    """
+    qs = Listing.objects.all()
+    if listing_ids:
+        qs = qs.filter(pk__in=listing_ids)
+    qs.update(search_vector=_SEARCH_VECTOR)
 
 # ---------------------------------------------------------------------------
 # Categories
@@ -193,12 +217,14 @@ def create_listing(
 ) -> Listing:
     """Create a draft listing with validated category attributes."""
     cleaned = validate_attributes(category, attributes or {})
-    return Listing.objects.create(
+    listing = Listing.objects.create(
         seller=seller,
         category=category,
         attributes=cleaned,
         **fields,
     )
+    refresh_search_vector(listing.pk)
+    return listing
 
 
 @transaction.atomic
@@ -222,6 +248,8 @@ def update_listing(listing: Listing, *, category: Category | None = None,
         setattr(listing, name, value)
 
     listing.save()
+    # Title/description may have changed — keep the FTS index in sync.
+    refresh_search_vector(listing.pk)
     return listing
 
 

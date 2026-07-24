@@ -34,6 +34,8 @@ DJANGO_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    # Postgres-specific features: full-text search, GIN indexes on JSONB.
+    "django.contrib.postgres",
 ]
 
 THIRD_PARTY_APPS = [
