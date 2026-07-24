@@ -93,3 +93,19 @@ export type Paginated<T> = {
   previous: string | null;
   results: T[];
 };
+
+/** DRF cursor pagination envelope (no total count by design). */
+export type CursorPage<T> = {
+  next: string | null;
+  previous: string | null;
+  results: T[];
+};
+
+/** A page of listings plus the opaque cursor for the next page (if any). */
+export type ListingFeed = {
+  results: Listing[];
+  nextCursor: string | null;
+};
+
+/** Public sort options for the directory (mirrors the API). */
+export type ListingSort = "newest" | "price_asc" | "price_desc" | "relevance";

@@ -1,10 +1,13 @@
 // Server-side data fetchers (used by server components). These talk to the API
 // over the compose network and normalise media URLs for the browser.
+import { cursorFrom } from "@/lib/browse";
 import { API_BASE, toBrowserUrl } from "@/lib/config";
 import type {
   Category,
+  CursorPage,
   Health,
   Listing,
+  ListingFeed,
   Paginated,
   PublicProfile,
 } from "@/lib/types";
@@ -63,6 +66,27 @@ export async function getCategories(): Promise<Category[]> {
     return data.results;
   } catch {
     return [];
+  }
+}
+
+/**
+ * Fetch a page of the public listings directory (server-side). ``query`` is the
+ * already-whitelisted set of filter/sort params; the returned ``nextCursor`` is
+ * fed back by the client to load subsequent pages.
+ */
+export async function getListings(query: URLSearchParams): Promise<ListingFeed> {
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/listings/?${query.toString()}`, {
+      cache: "no-store",
+    });
+    if (!res.ok) return { results: [], nextCursor: null };
+    const data = (await res.json()) as CursorPage<Listing>;
+    return {
+      results: data.results.map(normaliseListing),
+      nextCursor: cursorFrom(data.next),
+    };
+  } catch {
+    return { results: [], nextCursor: null };
   }
 }
 

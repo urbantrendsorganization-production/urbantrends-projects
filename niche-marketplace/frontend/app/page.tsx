@@ -1,71 +1,44 @@
-import Link from "next/link";
+import { BrowseBar } from "@/components/browse/BrowseBar";
+import { BrowseResults } from "@/components/browse/BrowseResults";
+import { FilterForm } from "@/components/browse/FilterForm";
+import { getCategories, getListings } from "@/lib/api";
+import { buildListingQuery, toSearchParams } from "@/lib/browse";
 
-import { getHealth } from "@/lib/api";
+// Search results are inherently per-request; never prerender.
+export const dynamic = "force-dynamic";
 
-// Server component: fetches the backend healthcheck on the server and renders
-// its status. This proves the frontend can reach the API end-to-end.
-export default async function Home() {
-  const health = await getHealth();
-  const online = health?.status === "ok";
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const source = toSearchParams(await searchParams);
+  const query = buildListingQuery(source);
+  const [categories, feed] = await Promise.all([
+    getCategories(),
+    getListings(query),
+  ]);
+  const queryKey = query.toString();
 
   return (
-    <main className="mx-auto max-w-3xl space-y-8 px-4 py-12">
-      <header className="space-y-2">
-        <h1 className="text-3xl font-bold tracking-tight text-brand">Marketplace</h1>
-        <p className="text-sm text-neutral-500">
-          Buy and sell locally — a portfolio classifieds project.
-        </p>
-        <div className="flex gap-3 pt-2">
-          <Link
-            href="/register"
-            className="rounded-xl bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark"
-          >
-            Create an account
-          </Link>
-          <Link
-            href="/login"
-            className="rounded-xl border border-neutral-300 px-4 py-2 text-sm font-semibold text-neutral-700 hover:bg-neutral-100"
-          >
-            Sign in
-          </Link>
-        </div>
-      </header>
+    <main className="mx-auto max-w-6xl px-4 py-6">
+      <div className="lg:grid lg:grid-cols-[240px_1fr] lg:gap-8">
+        <aside className="hidden lg:block">
+          <div className="sticky top-20">
+            <FilterForm categories={categories} />
+          </div>
+        </aside>
 
-      <section className="max-w-md rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">
-            API status
-          </h2>
-          <span
-            className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${
-              online ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
-            }`}
-          >
-            <span
-              className={`h-2 w-2 rounded-full ${online ? "bg-green-500" : "bg-red-500"}`}
-              aria-hidden
-            />
-            {online ? "Online" : "Unreachable"}
-          </span>
+        <div className="space-y-6">
+          <BrowseBar categories={categories} />
+          <BrowseResults
+            key={queryKey}
+            initial={feed.results}
+            initialCursor={feed.nextCursor}
+            query={queryKey}
+          />
         </div>
-
-        {health ? (
-          <dl className="mt-4 grid grid-cols-2 gap-y-3 text-sm">
-            <dt className="text-neutral-500">Status</dt>
-            <dd className="text-right font-medium">{health.status}</dd>
-            <dt className="text-neutral-500">Version</dt>
-            <dd className="text-right font-medium">{health.version}</dd>
-            <dt className="text-neutral-500">Database</dt>
-            <dd className="text-right font-medium">{health.services.database}</dd>
-            <dt className="text-neutral-500">Redis</dt>
-            <dd className="text-right font-medium">{health.services.redis}</dd>
-          </dl>
-        ) : (
-          <p className="mt-4 text-sm text-neutral-500">
-            Could not reach the backend at <code>/api/v1/health/</code>. Is the API running?
-          </p>
-        )}
-      </section>
+      </div>
     </main>
   );
 }
