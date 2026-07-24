@@ -79,3 +79,9 @@ Built in phases (see `CLAUDE.md`).
   frontend is a mobile-first grid with a filter drawer (mobile) / sidebar
   (desktop), category navigation, and "load more". Seed 1,000+ demo listings
   with `python manage.py seed_listings`.
+- **Phase 4 — Messaging** ✅ listing-scoped chat: one `Conversation` per
+  (listing, buyer) with `Message` read state, all rules (start/post, blocking,
+  read-on-open, unread counts) enforced in a service layer. Poll-based frontend
+  (SWR) — a "Message seller" button on listings, an inbox, a thread view with
+  read receipts and an auto-growing composer, a live navbar unread badge, and
+  block/report from the thread. No websockets (by design).
