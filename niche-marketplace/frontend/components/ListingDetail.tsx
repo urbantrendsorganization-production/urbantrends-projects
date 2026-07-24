@@ -112,6 +112,8 @@ export function ListingDetail({ listing: initial }: { listing: Listing }) {
               <div className="text-neutral-500">View profile →</div>
             </div>
           </Link>
+
+          <MessageSellerButton listing={listing} />
         </div>
       </div>
 
@@ -148,6 +150,56 @@ export function ListingDetail({ listing: initial }: { listing: Listing }) {
 
       <OwnerActions listing={listing} onChange={setListing} />
     </main>
+  );
+}
+
+function MessageSellerButton({ listing }: { listing: Listing }) {
+  const { user, isAuthenticated, authFetch } = useAuth();
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // The owner manages the listing elsewhere; no "message yourself" button.
+  if (user && user.id === listing.seller.id) return null;
+  // Sold/inactive listings aren't message-worthy from the public page.
+  if (listing.status !== "active" && listing.status !== "reserved") return null;
+
+  if (!isAuthenticated) {
+    return (
+      <Link
+        href={`/login?next=/listings/${listing.id}`}
+        className="flex h-11 w-full items-center justify-center rounded-xl bg-brand text-sm font-semibold text-white transition hover:bg-brand-dark"
+      >
+        Sign in to message seller
+      </Link>
+    );
+  }
+
+  const start = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await authFetch("/api/v1/conversations/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ listing: listing.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(apiError(data, "Couldn't start the conversation."));
+      router.push(`/messages/${data.id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <Button onClick={start} disabled={busy} className="w-full">
+        {busy ? "Opening…" : "Message seller"}
+      </Button>
+      {error ? <Alert tone="error">{error}</Alert> : null}
+    </div>
   );
 }
 

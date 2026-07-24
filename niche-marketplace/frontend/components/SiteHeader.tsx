@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { useAuth } from "@/lib/auth";
 import { PUBLIC_API_BASE } from "@/lib/config";
+import { useUnreadCount } from "@/lib/messaging";
 
 export function SiteHeader() {
   const { user, loading, isAuthenticated, logout } = useAuth();
@@ -29,6 +30,7 @@ export function SiteHeader() {
                 >
                   My listings
                 </Link>
+                <MessagesLink />
                 <Link href="/profile" className="font-medium text-neutral-700 hover:text-brand">
                   {user?.display_name || "Profile"}
                 </Link>
@@ -58,6 +60,23 @@ export function SiteHeader() {
 
       {isAuthenticated && user && !user.is_verified ? <VerifyBanner email={user.email} /> : null}
     </>
+  );
+}
+
+function MessagesLink() {
+  const unread = useUnreadCount(true);
+  return (
+    <Link
+      href="/messages"
+      className="relative font-medium text-neutral-700 hover:text-brand"
+    >
+      Messages
+      {unread > 0 ? (
+        <span className="absolute -right-3 -top-2 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-brand px-1 text-[10px] font-semibold text-white">
+          {unread > 9 ? "9+" : unread}
+        </span>
+      ) : null}
+    </Link>
   );
 }
 

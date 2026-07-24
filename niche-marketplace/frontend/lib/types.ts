@@ -109,3 +109,39 @@ export type ListingFeed = {
 
 /** Public sort options for the directory (mirrors the API). */
 export type ListingSort = "newest" | "price_asc" | "price_desc" | "relevance";
+
+// --- Messaging -----------------------------------------------------------
+
+export type MessageParty = {
+  id: number;
+  name: string;
+  avatar: string | null;
+};
+
+export type ConversationListing = {
+  id: number;
+  title: string;
+  price: string;
+  currency: string;
+  status: ListingStatus;
+  thumbnail: string | null;
+};
+
+export type Conversation = {
+  id: number;
+  listing: ConversationListing;
+  other_party: MessageParty;
+  last_message: { body: string; created_at: string; sender: number } | null;
+  unread: number;
+  last_message_at: string | null;
+  created_at: string;
+};
+
+export type Message = {
+  id: number;
+  sender: number;
+  body: string;
+  is_mine: boolean;
+  read_at: string | null;
+  created_at: string;
+};
