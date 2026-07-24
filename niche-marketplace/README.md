@@ -70,3 +70,12 @@ Built in phases (see `CLAUDE.md`).
   publish and mark listings sold from the UI (`/sell`, `/my-listings`,
   listing detail with owner actions). Seed a realistic tree with
   `python manage.py seed_catalog`.
+- **Phase 3 — Search & browse** ✅ the directory (landing page) centerpiece.
+  Postgres full-text search (`SearchVector` over title/description with a GIN
+  index) plus faceted filters — category subtree, price range, condition,
+  location, and category-specific JSONB attributes (GIN-indexed) — all
+  AND-combined and reflected in the URL. Sort by newest / price, cursor
+  pagination, and a query-count test proving the feed has no N+1s. The
+  frontend is a mobile-first grid with a filter drawer (mobile) / sidebar
+  (desktop), category navigation, and "load more". Seed 1,000+ demo listings
+  with `python manage.py seed_listings`.
