@@ -9,6 +9,7 @@ urlpatterns = [
     path("api/v1/", include("apps.core.urls")),
     path("api/v1/", include("apps.accounts.urls")),
     path("api/v1/", include("apps.catalog.urls")),
+    path("api/v1/", include("apps.messaging.urls")),
 ]
 
 # Serve uploaded media (avatars) from the dev server. In prod Caddy/whitenoise
