@@ -1,15 +1,35 @@
-# Caddy fronts the API with automatic HTTPS (Let's Encrypt). DNS for
-# marketplace.urbantrends.dev must point at this box, with ports 80 + 443 open.
+# Marketplace reverse proxy — vhost SNIPPET for the shared HOST Caddy.
+#
+# Caddy runs on the host and already fronts the other UrbanTrends stacks
+# (onboardkit, keja, sitechat, rentflow, urbantrends); this stack does NOT run
+# its own Caddy — that would collide on :80/:443. The host Caddy loads
+# per-service blocks via `import /etc/caddy/conf.d/*.caddy`, so install this as
+# a drop-in:
+#   sudo cp infra/Caddyfile /etc/caddy/conf.d/marketplace.caddy
+#   sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+#
+# The API is published on 127.0.0.1:8088 by docker-compose.prod.yml. Caddy
+# terminates TLS (automatic Let's Encrypt) and proxies to it. DNS for
+# marketplace.urbantrends.dev must already point at the box.
+
 marketplace.urbantrends.dev {
 	encode zstd gzip
 
-	# User-uploaded media is served directly from the shared volume — fast,
-	# and it keeps large files off the Python workers.
+	# User uploads + generated thumbnails are served straight off disk from the
+	# path the api and worker containers bind-mount to /app/media. Keeps large
+	# files off the gunicorn workers entirely.
 	handle_path /media/* {
-		root * /srv/media
+		root * /opt/marketplace/media
 		file_server
 	}
 
-	# Everything else (API, admin, WhiteNoise static) goes to Django.
-	reverse_proxy backend:8000
+	# Everything else — API, Django admin, WhiteNoise static — goes to gunicorn.
+	handle {
+		reverse_proxy 127.0.0.1:8088
+	}
+
+	log {
+		output stdout
+		format console
+	}
 }

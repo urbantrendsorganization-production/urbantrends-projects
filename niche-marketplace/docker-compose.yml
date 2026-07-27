@@ -28,7 +28,10 @@ services:
       retries: 10
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      # Dev target adds ruff/pytest; prod is the default target (see Dockerfile).
+      target: dev
     # Apply migrations, then run the auto-reloading dev server.
     command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
     volumes:
@@ -57,7 +60,9 @@ services:
         condition: service_healthy
 
   worker:
-    build: ./backend
+    build:
+      context: ./backend
+      target: dev
     # Celery worker for async jobs (listing thumbnail generation).
     command: celery -A config worker -l info
     volumes:
