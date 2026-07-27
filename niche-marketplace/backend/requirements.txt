@@ -1,0 +1,23 @@
+# Core
+Django==5.1.6
+djangorestframework==3.15.2
+django-cors-headers==4.6.0
+djangorestframework-simplejwt==5.4.0
+
+# Data stores
+psycopg[binary]==3.2.4
+redis==5.2.1
+
+# Media (avatar uploads)
+Pillow==11.1.0
+
+# Async tasks
+celery==5.4.0
+
+# Prod server
+gunicorn==23.0.0
+# Serve hashed/compressed static files from the app (admin, DRF browsable API)
+whitenoise==6.8.2
+
+# Config
+django-environ==0.12.0

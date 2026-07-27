@@ -58,12 +58,12 @@ android {
                 // Fallback for dev/CI without the upload key. NOT publishable.
                 signingConfigs.getByName("debug")
             }
-            isMinifyEnabled = true
-            isShrinkResources = true
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro",
-            )
+            // Minify/resource-shrink disabled: R8 resource shrinking can produce
+            // an APK some device installers reject ("problem parsing the
+            // package"). Correctness over size for the sideloaded demo build.
+            // Re-enable + test on-device before relying on it for a Play AAB.
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }
