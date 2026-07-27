@@ -45,20 +45,54 @@ Loopback ports in use: 3000-3002, 5000, 8000-8002, 8083, 8086 (onboardkit),
   `ghcr.io/urbantrendsorganization-production/urbantrends-projects/marketplace-backend:main`.
 
 ### First deploy
+
+The box keeps the whole monorepo checked out at `/opt/urbantrends-projects/`
+(same as onboarding-kit); deploy from the project directory inside it. Media
+lives **outside** the checkout, so `git pull` — or a stray `git clean` — can
+never touch user uploads.
+
 ```bash
-sudo mkdir -p /opt/marketplace/media && cd /opt/marketplace
+sudo mkdir -p /opt/marketplace/media
 
-# Only the deploy files are needed on the box — not the source tree.
-curl -O https://raw.githubusercontent.com/urbantrendsorganization-production/urbantrends-projects/main/niche-marketplace/docker-compose.prod.yml
-curl -O https://raw.githubusercontent.com/urbantrendsorganization-production/urbantrends-projects/main/niche-marketplace/.env.prod.example
-mv .env.prod.example .env.prod
+git clone git@github.com:urbantrendsorganization-production/urbantrends-projects.git \
+  /opt/urbantrends-projects
+cd /opt/urbantrends-projects/niche-marketplace
 
-# Edit .env.prod: DJANGO_SECRET_KEY, POSTGRES_PASSWORD, RESEND_API_KEY,
-# CORS_ALLOWED_ORIGINS + FRONTEND_URL (your Vercel URL).
+cp .env.prod.example .env.prod
+chmod 600 .env.prod
+```
 
-# The image is public? Skip this. Private packages need a GHCR login first:
-#   echo "$GHCR_PAT" | docker login ghcr.io -u <github-user> --password-stdin
+Edit `.env.prod`: `DJANGO_SECRET_KEY`, `POSTGRES_PASSWORD`, `RESEND_API_KEY`,
+`CORS_ALLOWED_ORIGINS` + `FRONTEND_URL` (the Vercel URL), and pin `IMAGE_TAG`
+to the SHA tag you intend to run. Private packages need a GHCR login first:
+`echo "$GHCR_PAT" | docker login ghcr.io -u <github-user> --password-stdin`.
 
+### Preflight: check the config before starting
+
+A malformed value in `.env.prod` fails Django's system checks, which run
+*before* `migrate`. The container exits 1, `restart: unless-stopped` turns that
+into a crash loop, and it surfaces as 502s from Caddy on every request —
+including CORS preflights, which makes it look like a CORS problem. Catch it
+first:
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml run --rm api \
+  python manage.py check --deploy
+```
+
+Non-zero exit on any ERROR. The one that has actually bitten:
+
+```
+(corsheaders.E014) Origin '…/api/v1/auth/login/' in CORS_ALLOWED_ORIGINS should not have path
+```
+
+An origin is **scheme + host + optional port only** — comma-separated, no path,
+no trailing slash. It names where the *browser page* is served from (the Vercel
+URL), never the API being called.
+
+Then start it:
+
+```bash
 docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
 ```
 
@@ -110,7 +144,28 @@ Seed the category tree and create an admin user:
 ```bash
 docker compose -f docker-compose.prod.yml exec api python manage.py seed_catalog
 docker compose -f docker-compose.prod.yml exec api python manage.py createsuperuser
+docker compose -f docker-compose.prod.yml exec api python manage.py seed_listings
 ```
+
+### Verify media serving
+
+`seed_listings` creates **no images** — the coloured tiles in the browse grid
+are `ListingCard`'s placeholder for a listing with no photo, not a broken image
+pipeline. Seeded data therefore proves nothing about media, and the only way to
+exercise the path is a real upload:
+
+1. Sign in on the site → **Sell** → post a listing with a photo.
+2. The Celery `worker` generates the thumbnail; both files land under
+   `/opt/marketplace/media/listings/`.
+
+```bash
+ls -R /opt/marketplace/media | head          # files present on the host
+curl -sI https://marketplace.urbantrends.dev/media/listings/<file>.jpg | head -3
+```
+
+A `200` proves Caddy's `file_server` served it off disk: in production
+`DEBUG=False`, and `config/urls.py` only routes `MEDIA_URL` through Django when
+`DEBUG` is on — so if the request had fallen through to gunicorn it would 404.
 
 ### Redeploy
 CI publishes a new `:main` image on every push to `main`. On the box:
@@ -150,8 +205,21 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
    | `NEXT_PUBLIC_API_URL` | `https://marketplace.urbantrends.dev`   |
    | `API_URL`             | `https://marketplace.urbantrends.dev`   |
 
+   Leave **Sensitive** off. Neither is a secret — `NEXT_PUBLIC_*` is compiled
+   into the client bundle by definition — and sensitive values can't be read
+   back in the dashboard, which is exactly what you want to inspect when
+   debugging a wrong URL.
+
+   `NEXT_PUBLIC_*` is inlined at **build time**, so setting it does nothing to
+   an already-built deployment. Redeploy with **"Use existing Build Cache"
+   unchecked**. `lib/config.ts` fails the build outright if it is missing,
+   rather than silently baking in the `localhost:8000` dev fallback.
+
 3. **Deploy.** Already live at `https://urbantrends-projects.vercel.app`,
-   rebuilding on every push to `main`.
+   rebuilding on every push to `main`. Confirm the value took:
+   ```bash
+   curl -s https://urbantrends-projects.vercel.app/ | grep -c 'localhost:8000'  # 0
+   ```
 4. Put that exact URL into the box's `.env.prod` as `CORS_ALLOWED_ORIGINS` and
    `FRONTEND_URL`, then redeploy the backend (step 1) so the browser is allowed
    to call the API and verification emails link back to the site.
@@ -166,6 +234,7 @@ Adding a custom frontend domain later? Just append it to `CORS_ALLOWED_ORIGINS`
 - [ ] DNS A record for `marketplace.urbantrends.dev` resolves to the box.
 - [ ] `:main` image published to GHCR by CI.
 - [ ] `.env.prod` filled in (secrets, Vercel URL) — never committed.
+- [ ] `manage.py check --deploy` passes against `.env.prod` before first `up -d`.
 - [ ] `8088` is still free on the box (`ss -ltnp | grep 8088`).
 - [ ] `import /etc/caddy/conf.d/*.caddy` present in `/etc/caddy/Caddyfile`.
 - [ ] `/etc/caddy/conf.d/marketplace.caddy` installed; `caddy validate` passes.
@@ -173,5 +242,9 @@ Adding a custom frontend domain later? Just append it to `CORS_ALLOWED_ORIGINS`
 - [ ] `docker compose ps` shows `api` **healthy**.
 - [ ] `https://marketplace.urbantrends.dev/api/v1/health/` returns `ok`.
 - [ ] Resend domain `urbantrends.dev` verified (SPF/DKIM) for outbound email.
-- [ ] Vercel env vars set to the API domain; site loads listings.
-- [ ] `CORS_ALLOWED_ORIGINS` + `FRONTEND_URL` match the Vercel URL.
+- [ ] Vercel env vars set to the API domain, **rebuilt without build cache**;
+      site loads listings and sign-in works.
+- [ ] `CORS_ALLOWED_ORIGINS` + `FRONTEND_URL` match the Vercel URL — origins are
+      scheme + host only, no path.
+- [ ] A listing posted **with a photo** renders its image, and
+      `curl -sI …/media/listings/<file>` returns `200`.

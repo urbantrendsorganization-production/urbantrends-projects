@@ -21,6 +21,24 @@ sudo caddy validate --config /etc/caddy/Caddyfile
 sudo systemctl reload caddy
 ```
 
+> **Prerequisite, not a given.** That `import` line is not part of a stock
+> Caddy install — this box originally kept every vhost in one monolithic
+> `/etc/caddy/Caddyfile` with no `conf.d` at all, and a `.caddy` file dropped
+> into a directory Caddy never reads fails silently. It was added on
+> 2026-07-27 while deploying the marketplace stack. On a rebuilt box, or any
+> other host, run the bootstrap first — see "One-time: enable drop-in vhosts"
+> in `niche-marketplace/DEPLOY.md`:
+>
+> ```bash
+> sudo cp -a /etc/caddy/Caddyfile /etc/caddy/Caddyfile.bak.$(date +%F-%H%M%S)
+> sudo mkdir -p /etc/caddy/conf.d
+> printf '\nimport /etc/caddy/conf.d/*.caddy\n' | sudo tee -a /etc/caddy/Caddyfile >/dev/null
+> sudo caddy validate --config /etc/caddy/Caddyfile
+> ```
+>
+> Verify with `grep -n import /etc/caddy/Caddyfile` before trusting the copy
+> above.
+
 ## First deploy
 
 OnboardKit lives inside the `urbantrends-projects` monorepo checkout at

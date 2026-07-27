@@ -76,6 +76,13 @@ jobs:
     defaults:
       run:
         working-directory: niche-marketplace/frontend
+    env:
+      # `next build` sets NODE_ENV=production, and lib/config.ts refuses to fall
+      # back to a dev URL in a production build. CI has no deployed API to point
+      # at, so pass an explicit placeholder; the real value is set per-environment
+      # in the Vercel project.
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      API_URL: http://localhost:8000
     steps:
       - uses: actions/checkout@v4
 
