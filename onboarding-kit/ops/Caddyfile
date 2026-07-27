@@ -7,6 +7,12 @@
 #   sudo cp ops/Caddyfile /etc/caddy/conf.d/onboardkit.caddy
 #   sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
 #
+# That import is NOT there by default — the box kept every vhost in one
+# monolithic /etc/caddy/Caddyfile until it was added on 2026-07-27. A .caddy
+# file dropped into a directory Caddy never reads fails silently, so confirm
+# with `grep -n import /etc/caddy/Caddyfile` first. Bootstrap instructions are
+# in ops/DEPLOY.md.
+#
 # The OnboardKit api is published on 127.0.0.1:8086 by docker-compose.prod.yml.
 # Caddy terminates TLS (auto Let's Encrypt) and proxies to it. KYC documents are
 # never proxied through here; clients fetch them via short-lived presigned S3
