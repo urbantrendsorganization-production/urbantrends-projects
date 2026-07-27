@@ -62,7 +62,30 @@ mv .env.prod.example .env.prod
 docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
 ```
 
-Add the vhost to the host Caddy (drop-in, no restart of other stacks):
+### One-time: enable drop-in vhosts
+
+The host Caddy originally kept every vhost in a single `/etc/caddy/Caddyfile`
+with no `conf.d`. Adding the import once turns each stack's vhost into a
+file-copy instead of an edit to the file serving all six sites:
+
+```bash
+TS=$(date +%F-%H%M%S)
+sudo cp -a /etc/caddy/Caddyfile /etc/caddy/Caddyfile.bak.$TS
+sudo mkdir -p /etc/caddy/conf.d
+printf '\n# Per-service vhosts, one file per stack.\nimport /etc/caddy/conf.d/*.caddy\n' \
+  | sudo tee -a /etc/caddy/Caddyfile >/dev/null
+sudo caddy validate --config /etc/caddy/Caddyfile   # rejects a bad config before reload
+```
+
+If `validate` fails, restore `/etc/caddy/Caddyfile.bak.$TS` and add the vhost
+below directly to `/etc/caddy/Caddyfile` instead. The failure to expect: a
+Caddyfile written in single-site shorthand (bare directives, no
+`example.com { … }` wrapper) parses a top-level `import` as a directive inside
+that implicit site.
+
+### Add the vhost
+
+Drop-in — no restart, and the other stacks keep serving through the reload:
 ```bash
 sudo cp infra/Caddyfile /etc/caddy/conf.d/marketplace.caddy
 sudo caddy validate --config /etc/caddy/Caddyfile
@@ -144,7 +167,9 @@ Adding a custom frontend domain later? Just append it to `CORS_ALLOWED_ORIGINS`
 - [ ] `:main` image published to GHCR by CI.
 - [ ] `.env.prod` filled in (secrets, Vercel URL) — never committed.
 - [ ] `8088` is still free on the box (`ss -ltnp | grep 8088`).
+- [ ] `import /etc/caddy/conf.d/*.caddy` present in `/etc/caddy/Caddyfile`.
 - [ ] `/etc/caddy/conf.d/marketplace.caddy` installed; `caddy validate` passes.
+- [ ] The other sites still answer after the reload (not just the new one).
 - [ ] `docker compose ps` shows `api` **healthy**.
 - [ ] `https://marketplace.urbantrends.dev/api/v1/health/` returns `ok`.
 - [ ] Resend domain `urbantrends.dev` verified (SPF/DKIM) for outbound email.
