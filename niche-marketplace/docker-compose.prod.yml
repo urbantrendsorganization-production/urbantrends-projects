@@ -1,11 +1,40 @@
 name: marketplace-prod
 
-# Production stack for the box (Hetzner/VPS). The frontend is deployed
-# separately on Vercel, so there is no frontend service here — Caddy fronts the
-# API on marketplace.urbantrends.dev with automatic TLS.
+# Production stack for the shared UrbanTrends box (CLAUDE.md Phase 7).
+#   Deploy to /opt/marketplace/ alongside the other stacks:
+#   docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
 #
-# Deploy:
-#   docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+# Conventions this box enforces — see the stacks already running there
+# (onboardkit, keja-prod, sitechat, rentflow, urbantrends):
+#   - Images are PULLED from GHCR, never built on the box.
+#   - TLS + routing are handled by the shared HOST Caddy. This stack runs no
+#     Caddy of its own; that would collide on :80/:443 with every other stack.
+#     Install infra/Caddyfile as a host drop-in instead.
+#   - The API publishes on 127.0.0.1 only, like every other app here. The host
+#     Caddy reverse-proxies marketplace.urbantrends.dev -> 127.0.0.1:8088.
+#     Ports already taken on the box: 3000-3002, 5000, 8000-8002, 8083,
+#     8086 (onboardkit), 8087 (keja), 9100-9101.
+#   - Postgres and Redis stay on the internal compose network — no published
+#     ports.
+#   - restart: unless-stopped everywhere.
+#
+# The frontend is deployed on Vercel, so there is no frontend service here.
+# There is no celery beat service either: nothing schedules periodic tasks yet.
+# Phase 6 (listing expiry) is what will need one.
+
+x-backend: &backend
+  image: ghcr.io/${GHCR_REPO:-urbantrendsorganization-production/urbantrends-projects}/marketplace-backend:${IMAGE_TAG:-main}
+  restart: unless-stopped
+  env_file: .env.prod
+  volumes:
+    # Bind-mounted (not a named volume) so the host Caddy can serve /media/*
+    # straight off disk instead of proxying uploads through gunicorn.
+    - ${MEDIA_ROOT:-/opt/marketplace/media}:/app/media
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
 
 services:
   db:
@@ -29,53 +58,42 @@ services:
       timeout: 5s
       retries: 10
 
-  backend:
-    build: ./backend
-    restart: unless-stopped
+  api:
+    <<: *backend
     # Migrate, collect static for WhiteNoise, then serve with gunicorn.
     command: >-
       sh -c "python manage.py migrate --noinput &&
              python manage.py collectstatic --noinput &&
              gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3"
-    env_file: .env.prod
-    volumes:
-      - mediafiles:/app/media
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    # Loopback only — the host Caddy is the sole public entry point.
+    ports:
+      - "127.0.0.1:${API_PORT:-8088}:8000"
+    healthcheck:
+      # No curl in the python:3.12-slim image, so probe with urllib.
+      # X-Forwarded-Proto spoofs TLS termination, otherwise prod's
+      # SECURE_SSL_REDIRECT would 301 this to https and fail the check.
+      # "localhost" must be in DJANGO_ALLOWED_HOSTS for the same reason.
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import urllib.request as u
+          r = u.Request(
+              "http://localhost:8000/api/v1/health/",
+              headers={"X-Forwarded-Proto": "https"},
+          )
+          u.urlopen(r, timeout=5).read()
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   worker:
-    build: ./backend
-    restart: unless-stopped
+    <<: *backend
+    # Celery worker for async jobs (listing thumbnail generation). Shares the
+    # media mount with the api so thumbnails land where Caddy serves them.
     command: celery -A config worker -l info
-    env_file: .env.prod
-    volumes:
-      # Shares media with the backend so thumbnails land where Caddy serves them.
-      - mediafiles:/app/media
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
-      - mediafiles:/srv/media:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - backend
 
 volumes:
   pgdata:
-  mediafiles:
-  caddy_data:
-  caddy_config:
