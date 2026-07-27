@@ -2,11 +2,16 @@
 #
 # Caddy runs on the host and already fronts the other UrbanTrends stacks
 # (onboardkit, keja, sitechat, rentflow, urbantrends); this stack does NOT run
-# its own Caddy — that would collide on :80/:443. The host Caddy loads
-# per-service blocks via `import /etc/caddy/conf.d/*.caddy`, so install this as
-# a drop-in:
+# its own Caddy — that would collide on :80/:443.
+#
+# The host Caddy loads per-service blocks via `import /etc/caddy/conf.d/*.caddy`,
+# so install this as a drop-in:
 #   sudo cp infra/Caddyfile /etc/caddy/conf.d/marketplace.caddy
 #   sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+#
+# That import is NOT there by default — the box kept every vhost in one
+# monolithic /etc/caddy/Caddyfile. DEPLOY.md ("One-time: enable drop-in vhosts")
+# has the one-off bootstrap; run it before the copy above.
 #
 # The API is published on 127.0.0.1:8088 by docker-compose.prod.yml. Caddy
 # terminates TLS (automatic Let's Encrypt) and proxies to it. DNS for
