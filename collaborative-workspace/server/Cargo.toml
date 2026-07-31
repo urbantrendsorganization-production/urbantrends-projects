@@ -1,0 +1,29 @@
+[package]
+name = "collab-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# `Store` is a trait object so tests can swap in a fake; async fns in traits are not yet
+# dyn-compatible without boxing. Off the hot sync path.
+async-trait = "0.1"
+axum = { version = "0.8", features = ["ws"] }
+bytes = "1"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+# Runtime query API rather than the `query!` macros on purpose: the macros need a live
+# database at compile time (or a `.sqlx` cache that rots silently), and a DB-free
+# `cargo build` / `clippy` is worth more than compile-time SQL checking for ~6 fixed queries.
+sqlx = { version = "0.8.6", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "migrate",
+] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "signal", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# The standalone `y-sync` crate is stale (0.4.0 pins yrs 0.17). The y-sync protocol now
+# lives upstream in yrs itself behind the `sync` feature — same wire format, same message
+# tags, maintained. See `yrs::sync`.
+yrs = { version = "0.27", features = ["sync"] }
