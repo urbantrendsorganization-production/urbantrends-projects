@@ -1,0 +1,131 @@
+name: booknasi
+
+# Workflows only run from `.github/workflows/` at the REPO ROOT, which is why
+# this lives here rather than under BookNasi/. Path filters keep it scoped to
+# the one project in this monorepo. Matches niche-marketplace.yml.
+
+on:
+  push:
+    paths:
+      - "BookNasi/**"
+      - ".github/workflows/booknasi.yml"
+  pull_request:
+    paths:
+      - "BookNasi/**"
+      - ".github/workflows/booknasi.yml"
+
+concurrency:
+  group: booknasi-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: backend (ruff · pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: BookNasi
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: booknasi
+          POSTGRES_PASSWORD: booknasi
+          POSTGRES_DB: booknasi
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U booknasi"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://booknasi:booknasi@localhost:5432/booknasi
+      REDIS_URL: redis://localhost:6379/0
+      DJANGO_SECRET_KEY: ci-secret-key
+      DJANGO_SETTINGS_MODULE: config.settings.local
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync
+
+      # btree_gist is created by core/migrations/0001. It needs elevated
+      # database privileges, and a failing CREATE EXTENSION surfaces as a
+      # confusing collection error rather than a clear failure. Prove it here,
+      # before anything imports Django.
+      - name: btree_gist can be created in the service container
+        run: |
+          uv run python - <<'PY'
+          import os, psycopg
+          with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as conn:
+              conn.execute("CREATE EXTENSION IF NOT EXISTS btree_gist")
+              got = conn.execute(
+                  "SELECT extversion FROM pg_extension WHERE extname='btree_gist'"
+              ).fetchone()
+              assert got, "btree_gist missing — slice 3's exclusion constraint cannot ship"
+              print(f"btree_gist {got[0]} available")
+          PY
+
+      - name: Lint (ruff)
+        run: uv run ruff check . && uv run ruff format --check .
+
+      - name: Check migrations are complete
+        run: uv run python manage.py makemigrations --check --dry-run
+
+      # Named explicitly, ahead of the full suite. These two protect a decision
+      # rather than an implementation (core/tests/README.md), and running them
+      # by path means deleting either file fails CI with a collection error
+      # instead of passing quietly over a smaller suite.
+      - name: Load-bearing tests (tenant isolation · org-scope guard)
+        run: |
+          uv run pytest \
+            core/tests/test_tenant_isolation.py \
+            core/tests/test_org_scoped_manager_guard.py \
+            -v
+
+      - name: Run tests
+        run: uv run pytest -q
+
+  tokens:
+    name: design tokens (build · check)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: BookNasi/web/packages/tokens
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build and check
+        run: node src/build.mjs && node src/check.mjs
+      - name: dist/ is in sync with tokens.json
+        run: git diff --exit-code dist/
+
+  frontend:
+    name: frontend (build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: BookNasi/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: BookNasi/web/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Build
+        run: npm run build
