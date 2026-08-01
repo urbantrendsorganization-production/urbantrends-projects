@@ -41,10 +41,16 @@ Decimal, not float, throughout — `0.25 * 1333` in binary floating point is
 
 Two clamps after rounding:
 
-- **Never zero.** A percentage that rounds down to nothing is not a deposit,
-  and a service that takes a KES 0 deposit is a free no-show. Floor of 1.
+- **Never below the shop's floor.** `Shop.min_deposit_amount`, default KES 50.
+  A one-shilling deposit costs an STK push to collect — Safaricom charges the
+  same to move KES 1 as KES 500 — and deters nobody from not turning up. The
+  floor is per-shop rather than a constant here because a barber taking KES 200
+  haircuts and a braider taking KES 6,000 installations have different ideas of
+  what a meaningful commitment is.
 - **Never more than the price.** A deposit larger than the bill is a refund
-  waiting to happen.
+  waiting to happen. This clamp is applied *last*, so a service priced below the
+  shop's floor takes the whole price as its deposit rather than more than it —
+  full prepayment on a KES 30 item, which is the sane reading.
 """
 
 from decimal import ROUND_HALF_UP, Decimal
@@ -58,6 +64,11 @@ PERCENT = Decimal("100")
 #: charging nothing has to be a deliberate change rather than the default.
 DEFAULT_DEPOSIT_PERCENT = Decimal("25")
 
+#: Default for `Shop.min_deposit_amount`. Every deposit is floored at the
+#: shop's own value; this is only what a new shop starts with.
+DEFAULT_MIN_DEPOSIT = 50
+MAX_MIN_DEPOSIT = 5000
+
 
 class DepositMode(models.TextChoices):
     NONE = "none", "No deposit"
@@ -65,12 +76,14 @@ class DepositMode(models.TextChoices):
     PERCENT = "percent", "Percentage of price"
 
 
-def deposit_amount(*, mode, value, price):
+def deposit_amount(*, mode, value, price, minimum=DEFAULT_MIN_DEPOSIT):
     """Whole shillings to take up front. The only implementation of this.
 
     `value` is shillings when `mode` is flat, and a percentage when `mode` is
-    percent. Returns 0 only when no deposit is due at all — a service with
-    `mode=none`, or a service priced at zero.
+    percent. `minimum` is the shop's floor — callers pass
+    `shop.min_deposit_amount`; the default exists so this stays callable from a
+    test without a shop. Returns 0 only when no deposit is due at all — a
+    service with `mode=none`, or a service priced at zero.
     """
     if mode == DepositMode.NONE or price <= 0 or value is None:
         return 0
@@ -84,9 +97,11 @@ def deposit_amount(*, mode, value, price):
 
     shillings = int(amount.quantize(WHOLE_SHILLING, rounding=ROUND_HALF_UP))
 
-    # A deposit that rounds away to nothing is not a deposit.
-    shillings = max(shillings, 1)
-    # And one larger than the bill is a refund waiting to happen.
+    # A deposit below the shop's floor is not worth the STK push it costs to
+    # collect, and does not make anyone turn up.
+    shillings = max(shillings, minimum)
+    # Applied last: one larger than the bill is a refund waiting to happen, and
+    # that outranks the floor.
     return min(shillings, price)
 
 

@@ -8,11 +8,13 @@ from decimal import Decimal
 
 import pytest
 
-from shops.money import DepositMode, deposit_amount, format_kes
+from shops.money import DEFAULT_MIN_DEPOSIT, DepositMode, deposit_amount, format_kes
 
 
-def deposit(mode, value, price):
-    return deposit_amount(mode=mode, value=value, price=price)
+def deposit(mode, value, price, minimum=1):
+    """`minimum=1` keeps these tests about rounding rather than about the shop
+    floor, which has its own class at the bottom of this file."""
+    return deposit_amount(mode=mode, value=value, price=price, minimum=minimum)
 
 
 class TestNoDeposit:
@@ -85,6 +87,41 @@ class TestPercent:
     def test_the_floor_never_exceeds_the_price(self):
         """Both clamps at once: floor of 1, ceiling of price."""
         assert deposit(DepositMode.PERCENT, Decimal("1"), 1) == 1
+
+
+class TestTheShopFloor:
+    """`Shop.min_deposit_amount`, default KES 50.
+
+    A one-shilling deposit costs a full STK push to collect and deters nobody;
+    the floor is what makes a deposit a commitment rather than a formality.
+    """
+
+    def test_the_default_floor_is_fifty(self):
+        assert DEFAULT_MIN_DEPOSIT == 50
+        # 1% of KES 1,000 is 10, raised to the shop floor.
+        assert deposit_amount(mode=DepositMode.PERCENT, value=Decimal("1"), price=1000) == 50
+
+    def test_a_percentage_below_the_floor_is_raised_to_it(self):
+        assert deposit(DepositMode.PERCENT, Decimal("5"), 400, minimum=50) == 50
+
+    def test_a_percentage_above_the_floor_is_untouched(self):
+        assert deposit(DepositMode.PERCENT, Decimal("25"), 3500, minimum=50) == 875
+
+    def test_the_floor_never_pushes_a_deposit_above_the_price(self):
+        """A KES 30 service at a shop with a KES 50 floor takes the whole 30 —
+        full prepayment, not a deposit larger than the bill. The price clamp is
+        applied last precisely so it outranks the floor."""
+        assert deposit(DepositMode.PERCENT, Decimal("25"), 30, minimum=50) == 30
+
+    def test_the_floor_does_not_create_a_deposit_where_there_is_none(self):
+        """Mode `none` still means nothing, whatever the floor says. Otherwise
+        raising the shop floor would silently make deposit-free services
+        publicly bookable — CLAUDE.md §5."""
+        assert deposit(DepositMode.NONE, None, 3500, minimum=50) == 0
+
+    def test_a_higher_shop_floor_is_honoured(self):
+        """A braider taking KES 6,000 installations may want KES 500 minimum."""
+        assert deposit(DepositMode.PERCENT, Decimal("5"), 3000, minimum=500) == 500
 
 
 class TestFormatting:

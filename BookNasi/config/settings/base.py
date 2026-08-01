@@ -15,11 +15,16 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    # Needed for DateTimeRangeField and ExclusionConstraint — the appointment
+    # time range and the no-double-booking constraint, CLAUDE.md §4.
+    "django.contrib.postgres",
     "rest_framework",
     "core",
     "accounts",
     "orgs",
     "shops",
+    "clients",
+    "scheduling",
     "public_api",
 ]
 

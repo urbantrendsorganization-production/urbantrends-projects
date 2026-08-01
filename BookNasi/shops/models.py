@@ -19,7 +19,14 @@ from accounts.phone import normalize_phone
 from core.managers import OrgScopedQuerySet
 from core.models import OrgDerivedModel, OrgScopedModel
 from shops.durations import resolve_duration
-from shops.money import DEFAULT_DEPOSIT_PERCENT, DepositMode, deposit_amount
+from shops.integrity import DepositIntegrityMixin, UnguardedServiceQuerySet
+from shops.money import (
+    DEFAULT_DEPOSIT_PERCENT,
+    DEFAULT_MIN_DEPOSIT,
+    MAX_MIN_DEPOSIT,
+    DepositMode,
+    deposit_amount,
+)
 from shops.slugs import validate_shop_slug
 
 MIN_SERVICE_MINUTES = 5
@@ -70,10 +77,30 @@ class Shop(OrgScopedModel):
         validators=[MaxValueValidator(120)],
         help_text="Turnaround between appointments. Shop-wide in v1.",
     )
+    slot_interval_minutes = models.PositiveSmallIntegerField(
+        default=15,
+        validators=[MinValueValidator(5), MaxValueValidator(60)],
+        help_text="Slots land on a clock grid this many minutes apart. Slice 3, decision (a).",
+    )
+    min_lead_minutes = models.PositiveSmallIntegerField(
+        default=30,
+        validators=[MaxValueValidator(1440)],
+        help_text="Public bookings must start at least this far ahead. Ignored for walk-ins.",
+    )
+    booking_horizon_days = models.PositiveSmallIntegerField(
+        default=60,
+        validators=[MinValueValidator(1), MaxValueValidator(365)],
+        help_text="How far ahead the public can book. Bounds the damage one script can do.",
+    )
     hold_ttl_minutes = models.PositiveSmallIntegerField(
         default=3,
         validators=[MinValueValidator(1), MaxValueValidator(30)],
         help_text="How long an unpaid slot is held while the STK push is outstanding.",
+    )
+    min_deposit_amount = models.PositiveIntegerField(
+        default=DEFAULT_MIN_DEPOSIT,
+        validators=[MinValueValidator(1), MaxValueValidator(MAX_MIN_DEPOSIT)],
+        help_text="Floor for every deposit at this shop, in whole shillings.",
     )
     refund_window_hours = models.PositiveSmallIntegerField(
         default=24,
@@ -93,6 +120,21 @@ class Shop(OrgScopedModel):
             ),
             models.CheckConstraint(
                 condition=Q(refund_window_hours__lte=168), name="shop_refund_window_sane"
+            ),
+            models.CheckConstraint(
+                condition=Q(slot_interval_minutes__gte=5, slot_interval_minutes__lte=60),
+                name="shop_slot_interval_sane",
+            ),
+            models.CheckConstraint(
+                condition=Q(min_lead_minutes__lte=1440), name="shop_min_lead_sane"
+            ),
+            models.CheckConstraint(
+                condition=Q(booking_horizon_days__gte=1, booking_horizon_days__lte=365),
+                name="shop_booking_horizon_sane",
+            ),
+            models.CheckConstraint(
+                condition=Q(min_deposit_amount__gte=1, min_deposit_amount__lte=MAX_MIN_DEPOSIT),
+                name="shop_min_deposit_sane",
             ),
         ]
 
@@ -305,8 +347,10 @@ class Leave(OrgDerivedModel):
         return self.starts_on <= day <= self.ends_on
 
 
-class ServiceQuerySet(OrgScopedQuerySet):
-    """Extends the org-scoped queryset so the slice 1 guard still applies."""
+class ServiceQuerySet(DepositIntegrityMixin, OrgScopedQuerySet):
+    """Extends the org-scoped queryset so the slice 1 guard still applies, and
+    carries the deposit guard so `.update()` cannot leave `deposit_amount`
+    stale. See shops/integrity.py."""
 
     #: The rule, written once. `Service.is_publicly_bookable` mirrors it in
     #: Python, and a test asserts the two agree across every combination —
@@ -361,6 +405,10 @@ class Service(OrgDerivedModel):
     )
 
     objects = models.Manager.from_queryset(ServiceQuerySet)()
+    #: Redeclared so the deposit guard covers Django's own manager too. Leaving
+    #: the inherited plain `Manager` here would leave `Service.all_objects
+    #: .update(price=...)` as an open bypass.
+    all_objects = models.Manager.from_queryset(UnguardedServiceQuerySet)()
 
     class Meta:
         db_table = "services"
@@ -396,6 +444,21 @@ class Service(OrgDerivedModel):
                 condition=(~Q(deposit_mode=DepositMode.FLAT) | Q(deposit_value__lte=F("price"))),
                 name="service_flat_deposit_not_above_price",
             ),
+            # The database's share of keeping the *derived* column honest. It
+            # catches what SQL can see without restating the money arithmetic:
+            # a deposit above the bill, and a deposit on a service that has no
+            # deposit rule. Percentage drift is caught by shops/integrity.py
+            # instead — the rounding rule lives in exactly one place and it is
+            # not here.
+            models.CheckConstraint(
+                condition=(
+                    Q(deposit_mode=DepositMode.NONE, deposit_amount=0)
+                    | Q(price=0, deposit_amount=0)
+                    | (~Q(deposit_mode=DepositMode.NONE) & Q(deposit_amount__gt=0))
+                )
+                & Q(deposit_amount__lte=F("price")),
+                name="service_deposit_amount_within_price",
+            ),
         ]
 
     def __str__(self):
@@ -419,15 +482,31 @@ class Service(OrgDerivedModel):
                     raise ValidationError(
                         {"deposit_value": "A deposit cannot be more than the price."}
                     )
+                # A flat deposit under the shop's floor would be silently raised
+                # to it by shops.money.deposit_amount, leaving the owner looking
+                # at a number they did not type. Percentages are different — the
+                # owner typed a rate, not an amount, so the floor applying is
+                # expected and only the backstop clamp handles it.
+                floor = self.shop.min_deposit_amount if self.shop_id else None
+                if floor and self.price and self.deposit_value < min(floor, self.price):
+                    raise ValidationError(
+                        {
+                            "deposit_value": f"This shop's minimum deposit is KES {floor}. "
+                            "Raise the amount, or lower the shop minimum."
+                        }
+                    )
             elif self.deposit_mode == DepositMode.PERCENT and self.deposit_value > 100:
                 raise ValidationError({"deposit_value": "A percentage cannot exceed 100."})
 
     def save(self, *args, **kwargs):
-        # The stored column is always what the one function returns. A
-        # `Service.objects.update(price=...)` would bypass this — which is why
-        # the API never uses `.update()` for these fields.
+        # The stored column is always what the one function returns.
+        # `.update()`, `.bulk_update()` and `.bulk_create()` skip this method
+        # entirely; shops/integrity.py closes each of those three.
         self.deposit_amount = deposit_amount(
-            mode=self.deposit_mode, value=self.deposit_value, price=self.price
+            mode=self.deposit_mode,
+            value=self.deposit_value,
+            price=self.price,
+            minimum=self.shop.min_deposit_amount,
         )
         update_fields = kwargs.get("update_fields")
         if update_fields is not None and "deposit_amount" not in update_fields:

@@ -82,15 +82,21 @@ jobs:
       - name: Check migrations are complete
         run: uv run python manage.py makemigrations --check --dry-run
 
-      # Named explicitly, ahead of the full suite. These two protect a decision
+      # Named explicitly, ahead of the full suite. These protect a decision
       # rather than an implementation (core/tests/README.md), and running them
-      # by path means deleting either file fails CI with a collection error
+      # by path means deleting any one file fails CI with a collection error
       # instead of passing quietly over a smaller suite.
-      - name: Load-bearing tests (tenant isolation · org-scope guard)
+      - name: Load-bearing tests (tenancy · serializer split · double-booking)
         run: |
           uv run pytest \
             core/tests/test_tenant_isolation.py \
             core/tests/test_org_scoped_manager_guard.py \
+            shops/tests/test_tenant_isolation.py \
+            public_api/tests/test_serializer_split.py \
+            scheduling/tests/test_tenant_isolation.py \
+            scheduling/tests/test_concurrency.py \
+            scheduling/tests/test_cross_process_race.py \
+            scheduling/tests/test_cache.py \
             -v
 
       - name: Run tests

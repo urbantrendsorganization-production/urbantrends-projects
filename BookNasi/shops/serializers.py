@@ -53,8 +53,12 @@ class ShopSerializer(serializers.ModelSerializer):
             "logo_url",
             "accent_color",
             "buffer_minutes",
+            "slot_interval_minutes",
+            "min_lead_minutes",
+            "booking_horizon_days",
             "hold_ttl_minutes",
             "refund_window_hours",
+            "min_deposit_amount",
             "is_active",
             "created_at",
         ]

@@ -8,8 +8,10 @@ for by accident.
 
 import pytest
 
+from clients.models import Client
 from core.managers import CrossTenantQueryError
 from orgs.models import Membership, StaffInvite
+from scheduling.models import Appointment
 from shops.models import (
     Leave,
     OpeningHours,
@@ -40,6 +42,9 @@ ORG_SCOPED_MODELS = [
     Leave,
     Service,
     StaffService,
+    # slice 3
+    Client,
+    Appointment,
 ]
 
 
@@ -154,21 +159,29 @@ class TestTheUnguardedDefaultManager:
     def test_application_code_never_uses_all_objects(self, model):
         """`all_objects` is for Django, `.unscoped()` is for us. Keeping
         application code on one spelling means `grep -rn 'unscoped()'` still
-        returns the complete list of deliberate cross-tenant reads."""
+        returns the complete list of deliberate cross-tenant reads.
+
+        Parsed rather than grepped. A regex over the source flags the *prose* —
+        every docstring in shops/integrity.py that explains why the bypass is
+        closed reads as a use of it — and a test that cannot tell code from a
+        comment about code gets weakened until it means nothing.
+        """
+        import ast
         import pathlib
-        import re
 
         root = pathlib.Path(__file__).resolve().parents[2]
-        # Attribute access only — `Model.all_objects.filter(...)`. Declaring it,
-        # or naming it in `Meta.default_manager_name`, is how it is wired up and
-        # is not a query.
-        querying = re.compile(r"\.all_objects\b")
         offenders = []
         for path in root.glob("*/*.py"):
             if "test" in path.name or path.parts[-2] in {"migrations", "tests"}:
                 continue
-            if querying.search(path.read_text()):
-                offenders.append(str(path.relative_to(root)))
+            tree = ast.parse(path.read_text(), filename=str(path))
+            for node in ast.walk(tree):
+                # `Model.all_objects...` — attribute *access*. An assignment
+                # target (`all_objects = Manager()`) is a Name, and
+                # `Meta.default_manager_name = "all_objects"` is a string; both
+                # are how it is wired up rather than a query through it.
+                if isinstance(node, ast.Attribute) and node.attr == "all_objects":
+                    offenders.append(f"{path.relative_to(root)}:{node.lineno}")
         assert not offenders, f"use .unscoped() instead of .all_objects in {offenders}"
 
 
