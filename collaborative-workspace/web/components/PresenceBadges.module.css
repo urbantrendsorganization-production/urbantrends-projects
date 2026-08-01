@@ -1,0 +1,35 @@
+.badges {
+  display: flex;
+  align-items: center;
+}
+
+.badge {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-right: -7px;
+  border-radius: 50%;
+  border: 2px solid var(--background, #fff);
+  box-sizing: border-box;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+/* Yourself, pulled to the front of the stack. */
+.badge[data-local] {
+  order: -1;
+  outline: 1px solid currentColor;
+  outline-offset: -3px;
+}
+
+.badge:last-child {
+  margin-right: 0;
+}
+
+.overflow {
+  background: rgba(127, 127, 127, 0.6);
+}

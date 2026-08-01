@@ -1,0 +1,86 @@
+.stage {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.3);
+  font-size: 14px;
+}
+
+.room {
+  color: rgba(127, 127, 127, 1);
+}
+
+.button {
+  padding: 6px 12px;
+  border: 1px solid rgba(127, 127, 127, 0.5);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  border-color: currentColor;
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.status {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Stacking context for the scene + presence canvases. */
+.layers {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.status::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: baseline;
+  background: #9aa0a6;
+}
+
+.status[data-status="connected"]::before {
+  background: #06d6a0;
+}
+
+.status[data-status="connecting"]::before {
+  background: #ffd166;
+}
+
+.status[data-status="disconnected"]::before {
+  background: #ef476f;
+}
+
+.canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+/* Presence sits on top but must never swallow input — pointer events belong to the scene. */
+.overlay {
+  pointer-events: none;
+}
