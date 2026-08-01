@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.sqlite3
+
+.env
+.env.*
+!.env.example
+
+node_modules/
+.next/
+
+# web/packages/tokens/dist is generated but committed on purpose: CI checks it
+# against tokens.json, and consumers get the CSS without a build step.

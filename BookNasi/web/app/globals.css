@@ -1,0 +1,24 @@
+@import "@booknasi/tokens/css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  background: var(--bn-canvas);
+  color: var(--bn-ink);
+  font-family: var(--bn-font-ui);
+  font-size: var(--bn-text-body-size);
+  line-height: var(--bn-text-body-leading);
+  /* The handoff asks for this on any wrapping prose. */
+  text-wrap: pretty;
+}
+
+/* Money and times only, per the type spec. Tabular figures so a column of
+   prices does not shift as the digits change. */
+.bn-money,
+.bn-time {
+  font-family: var(--bn-font-mono);
+  font-variant-numeric: tabular-nums;
+}

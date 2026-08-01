@@ -1,0 +1,132 @@
+/* GENERATED from src/tokens.json by src/build.mjs — do not edit. */
+/* Scoped to .bn-root, never :root. See build.mjs for why. */
+
+.bn-root {
+  --bn-clay-50: #F6E9E1;
+  --bn-clay-200: #E9BFA5;
+  --bn-clay-400: #D97742;
+  --bn-accent: #C2521F;
+  --bn-clay-600: var(--bn-accent);
+  --bn-accent-pressed: #A34117;
+  --bn-clay-700: var(--bn-accent-pressed);
+  --bn-clay-900: #6E2A0E;
+  --bn-surface: #FFFFFF;
+  --bn-white: var(--bn-surface);
+  --bn-canvas: #FBF7F3;
+  --bn-paper: var(--bn-canvas);
+  --bn-line: #E8DFD6;
+  --bn-border: #D6C8BB;
+  --bn-line-strong: var(--bn-border);
+  --bn-track: #F1E7DE;
+  --bn-ink-45: #8E7C6E;
+  --bn-ink-70: #574A41;
+  --bn-ink: #1F1712;
+  --bn-ink-disabled: #A2948A;
+  --bn-pay-600: #1E8E3E;
+  --bn-pay-700: #146C2F;
+  --bn-pay-50: #E6F2E8;
+  --bn-pay-dark: #3FBB63;
+  --bn-hold-600: #B26A00;
+  --bn-hold-700: #8A5200;
+  --bn-hold-50: #FBEFD9;
+  --bn-fail-600: #AF1B24;
+  --bn-fail-700: #8E1219;
+  --bn-fail-300: #E7A9A6;
+  --bn-fail-50: #FBE7E6;
+  --bn-info-600: #3D5A6C;
+  --bn-info-700: #2C4655;
+  --bn-info-50: #E7EDF1;
+  --bn-stk-bg: #0F2A18;
+
+  --bn-font-display: 'Bricolage Grotesque', system-ui, sans-serif;
+  --bn-font-ui: 'IBM Plex Sans', system-ui, sans-serif;
+  --bn-font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  --bn-text-display-size: 32px;
+  --bn-text-display-leading: 36px;
+  --bn-text-display-tracking: -0.02em;
+  --bn-text-display-sm-size: 30px;
+  --bn-text-display-sm-leading: 34px;
+  --bn-text-display-sm-tracking: -0.02em;
+  --bn-text-title-size: 22px;
+  --bn-text-title-leading: 28px;
+  --bn-text-title-tracking: -0.01em;
+  --bn-text-body-lg-size: 17px;
+  --bn-text-body-lg-leading: 24px;
+  --bn-text-body-size: 15px;
+  --bn-text-body-leading: 22px;
+  --bn-text-body-sm-size: 14px;
+  --bn-text-body-sm-leading: 1.55;
+  --bn-text-label-size: 13px;
+  --bn-text-label-leading: 16px;
+  --bn-text-label-tracking: 0.06em;
+  --bn-text-micro-size: 11.5px;
+  --bn-text-micro-leading: 14px;
+  --bn-text-micro-tracking: 0.08em;
+  --bn-text-money-size: 20px;
+  --bn-text-money-leading: 24px;
+
+  --bn-space-1: 4px;
+  --bn-space-2: 6px;
+  --bn-space-3: 8px;
+  --bn-space-4: 10px;
+  --bn-space-5: 12px;
+  --bn-space-6: 14px;
+  --bn-space-7: 16px;
+  --bn-space-8: 18px;
+  --bn-space-9: 20px;
+  --bn-space-10: 22px;
+  --bn-space-11: 24px;
+  --bn-space-12: 28px;
+  --bn-space-gutter: 20px;
+  --bn-space-gutter-desktop: 24px;
+
+  --bn-radius-chip: 8px;
+  --bn-radius-sm: 10px;
+  --bn-radius-md: 12px;
+  --bn-radius-card: 14px;
+  --bn-radius-panel: 16px;
+  --bn-radius-sheet: 20px;
+  --bn-radius-frame: 28px;
+  --bn-radius-pill: 999px;
+
+  --bn-shadow-sheet: 0 -18px 40px -20px rgba(31, 23, 18, 0.4);
+  --bn-shadow-fab: 0 10px 24px -6px rgba(194, 82, 31, 0.6);
+  --bn-shadow-focus: 0 0 0 4px #F6E9E1;
+
+  --bn-target-control: 52px;
+  --bn-target-cta: 56px;
+  --bn-target-cta-staff: 62px;
+  --bn-target-walkin-row: 64px;
+  --bn-target-text-button-min: 44px;
+
+  --bn-label-case: none;
+}
+
+/* A host embedding the widget overrides these, and only these, by setting them
+   on the mount container:
+  --bn-accent
+  --bn-accent-pressed
+  --bn-surface
+  --bn-canvas
+  --bn-border
+  --bn-font-display
+  --bn-font-ui
+  --bn-radius-md
+  --bn-label-case
+   Everything else is BookNasi's own.
+
+   The four invariants in CLAUDE.md §10 are deliberately absent from this file.
+   They live in tokens.ts as constants so no stylesheet can reach them. */
+
+@media (prefers-reduced-motion: reduce) {
+  /* Step changes and sheets cross-fade instead of sliding; the countdown bar
+     still animates, because it is information, not decoration. */
+  .bn-root * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+  .bn-root [data-bn-countdown] {
+    transition-duration: revert !important;
+  }
+}

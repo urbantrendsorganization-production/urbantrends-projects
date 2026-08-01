@@ -1,0 +1,27 @@
+{
+  "name": "booknasi-web",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "dev": "npm run tokens && next dev",
+    "build": "npm run tokens && next build",
+    "start": "next start",
+    "tokens": "npm --workspace @booknasi/tokens run build",
+    "tokens:check": "npm --workspace @booknasi/tokens run check",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "^15.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "autoprefixer": "^10.4.0",
+    "postcss": "^8.4.0",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.6.0"
+  }
+}
