@@ -19,6 +19,8 @@ INSTALLED_APPS = [
     "core",
     "accounts",
     "orgs",
+    "shops",
+    "public_api",
 ]
 
 MIDDLEWARE = [

@@ -155,6 +155,8 @@ class StaffInvite(OrgScopedModel):
 
     class Meta:
         db_table = "staff_invites"
+        # See the note on Service.Meta — this model redeclares `objects` too.
+        default_manager_name = "all_objects"
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(role__in=Role.values), name="invite_role_valid"

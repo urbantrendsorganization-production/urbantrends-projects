@@ -10,12 +10,37 @@ import pytest
 
 from core.managers import CrossTenantQueryError
 from orgs.models import Membership, StaffInvite
+from shops.models import (
+    Leave,
+    OpeningHours,
+    Service,
+    Shop,
+    ShopClosure,
+    Staff,
+    StaffService,
+    WorkingHours,
+)
 
 pytestmark = [pytest.mark.django_db, pytest.mark.loadbearing]
 
 # Every model that inherits OrgScopedModel. Slices 2-11 append to this list;
-# a new org-scoped model with no entry here is a gap in the guard.
-ORG_SCOPED_MODELS = [Membership, StaffInvite]
+# a new org-scoped model with no entry here is a gap in the guard, and
+# `test_every_org_scoped_model_is_covered_by_this_file` at the bottom fails
+# until it is added.
+ORG_SCOPED_MODELS = [
+    # slice 1
+    Membership,
+    StaffInvite,
+    # slice 2
+    Shop,
+    OpeningHours,
+    ShopClosure,
+    Staff,
+    WorkingHours,
+    Leave,
+    Service,
+    StaffService,
+]
 
 
 @pytest.mark.parametrize("model", ORG_SCOPED_MODELS, ids=lambda m: m.__name__)
@@ -104,6 +129,69 @@ class TestScopingSatisfiesTheGuard:
         """`.unscoped()` works, and is greppable. `grep -rn 'unscoped()' --include=*.py`
         should return a list short enough for a reviewer to read in full."""
         assert Membership.objects.unscoped().count() == 4  # both orgs, owner + stylist each
+
+
+@pytest.mark.parametrize("model", ORG_SCOPED_MODELS, ids=lambda m: m.__name__)
+class TestTheUnguardedDefaultManager:
+    """`all_objects` exists because Django's own machinery needs it.
+
+    `Model.full_clean()` validates unique constraints through `_default_manager`,
+    and reverse accessors are built from the same class, so pointing those at the
+    guarded manager makes the admin and model validation raise on legitimate
+    work. The important thing is that this did not quietly unguard `objects`.
+    """
+
+    def test_objects_is_still_the_guarded_one(self, model):
+        with pytest.raises(CrossTenantQueryError):
+            list(model.objects.all())
+
+    def test_all_objects_is_the_unguarded_one(self, model):
+        assert model.all_objects.count() >= 0
+
+    def test_django_resolves_internals_through_the_unguarded_manager(self, model):
+        assert model._meta.default_manager.name == "all_objects"
+
+    def test_application_code_never_uses_all_objects(self, model):
+        """`all_objects` is for Django, `.unscoped()` is for us. Keeping
+        application code on one spelling means `grep -rn 'unscoped()'` still
+        returns the complete list of deliberate cross-tenant reads."""
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+        # Attribute access only — `Model.all_objects.filter(...)`. Declaring it,
+        # or naming it in `Meta.default_manager_name`, is how it is wired up and
+        # is not a query.
+        querying = re.compile(r"\.all_objects\b")
+        offenders = []
+        for path in root.glob("*/*.py"):
+            if "test" in path.name or path.parts[-2] in {"migrations", "tests"}:
+                continue
+            if querying.search(path.read_text()):
+                offenders.append(str(path.relative_to(root)))
+        assert not offenders, f"use .unscoped() instead of .all_objects in {offenders}"
+
+
+class TestFullCleanStillWorks:
+    """The regression that motivated `all_objects`: model validation performs a
+    uniqueness query, which the guard was refusing to run."""
+
+    def test_full_clean_on_an_org_scoped_model_does_not_raise_the_guard(self, shop_setup):
+        from shops.models import Service
+
+        service = Service.all_objects.get(pk=shop_setup.braids.pk)
+        service.full_clean()  # must not raise CrossTenantQueryError
+
+    def test_full_clean_still_reports_real_validation_errors(self, shop_setup):
+        from django.core.exceptions import ValidationError
+
+        from shops.models import StaffService
+
+        link = StaffService.objects.for_org(shop_setup.organization).first()
+        link.duration_override_minutes = 0
+
+        with pytest.raises(ValidationError):
+            link.full_clean()
 
 
 class TestTheGuardCannotBeOptedOutOfByAccident:
