@@ -100,7 +100,18 @@ def what_is_in_the_way(facts, *, starts_at, duration_minutes):
 
 
 def _shorten(facts, *, staff, starts_at, duration_minutes, in_the_way):
-    """Finish at the first thing that is in the way, if enough time remains."""
+    """Finish at the first thing that is in the way, if enough time remains.
+
+    **Open question, surfaced rather than decided.** A shortened walk-in still
+    records `price_snapshot` at the service's full price, because the price is a
+    property of the service and this function has no mandate to discount one.
+    That means a service delivered in 16 minutes instead of 20 shows full
+    revenue against the stylist on the owner dashboard. `SHORTEN_FLOOR` bounds
+    the drift to at most 25% of one appointment's time, never its money. The
+    alternatives — prompting for an adjusted price, or pro-rating — are a
+    product decision with different effects on revenue-per-staff, and neither is
+    taken here.
+    """
     next_start = min(busy.starts_at for busy in in_the_way)
     available = int((next_start - starts_at) / timedelta(minutes=1))
     if available < MIN_SERVICE_MINUTES or available < duration_minutes * SHORTEN_FLOOR:

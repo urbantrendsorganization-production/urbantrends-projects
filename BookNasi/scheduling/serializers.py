@@ -27,7 +27,20 @@ class SlotSerializer(serializers.Serializer):
     duration_minutes = serializers.IntegerField(read_only=True)
 
     def get_local_time(self, slot):
-        return slot.starts_at.astimezone(LOCAL_TZ).strftime("%H:%M")
+        starts_at = slot["starts_at"] if isinstance(slot, dict) else slot.starts_at
+        return starts_at.astimezone(LOCAL_TZ).strftime("%H:%M")
+
+
+class AnyStaffSlotSerializer(SlotSerializer):
+    """ "Anyone available", with the stylist who actually owns each start.
+
+    Named because the confirm step books against a concrete person — see
+    `_earliest_per_start` in views.py. Without these two fields the client
+    would have to re-query to find out who it just booked with.
+    """
+
+    staff_id = serializers.UUIDField(read_only=True)
+    staff_name = serializers.CharField(read_only=True)
 
 
 class StaffSlotsSerializer(serializers.Serializer):

@@ -115,12 +115,23 @@ def _range(appointment, ends_at):
     return DateTimeTZRange(appointment.starts_at, ends_at, RANGE_BOUNDS)
 
 
-def apply_transition(appointment, to_status, *, now=None):
+def apply_transition(appointment, to_status, *, now=None, expired_hold=False):
     """Move one appointment to `to_status`, with its side effects. Returns it.
+
+    **The only function that writes `Appointment.status`.** Slice 5's hold
+    release goes through here too rather than setting the column itself —
+    `holds.release_hold` is a thin wrapper — because two places writing one
+    column is how a status ends up with the side effects of the other path
+    missing.
 
     Raises `TransitionRefused` when the move is not in the table, and `SlotTaken`
     when re-entering an active status collides with something booked in the
     meantime.
+
+    `expired_hold` distinguishes a hold that ran out from a client who pressed
+    cancel. Only the former is counted by `scheduling/abuse.py`; see the note
+    there about not teaching people to walk away from the page instead of using
+    the button.
     """
     now = now or timezone.now()
     to_status = S(to_status)
@@ -135,6 +146,7 @@ def apply_transition(appointment, to_status, *, now=None):
         raise TransitionRefused(appointment, to_status)
 
     fields = ["status", "updated_at"]
+    was_holding = appointment.status == S.PENDING_PAYMENT
     appointment.status = to_status
 
     if to_status == S.IN_PROGRESS:
@@ -169,6 +181,20 @@ def apply_transition(appointment, to_status, *, now=None):
     # walked out mid-service is a real thing, and losing `started_at` would lose
     # the only record that the chair was occupied at all.
 
+    queued_release = None
+    if was_holding:
+        # The hold is resolved either way, so the queued release is no longer
+        # wanted and the task id goes with it. Stamped here rather than in the
+        # caller so that a hold released by the sweep, by the eta task, or by a
+        # client pressing cancel all leave the row in the same shape.
+        #
+        # The id is kept in a local first: the revoke happens after the commit,
+        # by which point the column has already been cleared.
+        queued_release = appointment.hold_release_task_id
+        appointment.hold_released_at = now if expired_hold else None
+        appointment.hold_release_task_id = None
+        fields += ["hold_released_at", "hold_release_task_id"]
+
     with slot_taken_on_conflict(starts_at=appointment.starts_at, staff=appointment.staff):
         with transaction.atomic():
             if to_status in ACTIVE_STATUSES:
@@ -176,6 +202,14 @@ def apply_transition(appointment, to_status, *, now=None):
                 # the same reason — see booking.py's docstring on the deadlock.
                 order_bookings_for(appointment.staff_id)
             appointment.save(update_fields=fields)
+
+    if queued_release:
+        # After the commit, so a revoke never races a row that has not landed.
+        # Best-effort by design — the task re-checks before acting, so a failed
+        # revoke costs nothing. See scheduling/holds.py.
+        from scheduling.holds import cancel_scheduled_release
+
+        cancel_scheduled_release(queued_release, appointment_id=appointment.pk)
 
     return appointment
 

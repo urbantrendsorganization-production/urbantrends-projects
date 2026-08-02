@@ -56,14 +56,27 @@ against the given date and returns UTC. Africa/Nairobi is UTC+3 with no DST —
 CLAUDE.md §4 forbids a timezone abstraction layer — so the conversion is exact
 and reversible.
 
-Overnight trading (a 21:00–01:00 shop) is *not expressible* in v1: slice 2's
-`opening_hours_end_after_start` check constraint refuses it at the database.
+Overnight *trading hours* (a 21:00–01:00 shop) are not expressible: slice 2's
+`opening_hours_close_after_open` check constraint refuses them at the database —
+see the class docstring on `shops.models.OpeningHours`, which points back here.
 That is a real limitation and it is stated rather than hidden. It is also what
-makes this file simple and the cache key correct: every slot lies inside one EAT
-calendar date, so `(staff_id, EAT date)` partitions availability with no
-overlap. Adding overnight shops later means a `closes_next_day` boolean, a
-second window in `DayWindow`, and a cache key that invalidates two days per
-write — not a reshape of anything here.
+makes this file simple and the cache key correct: every *offered* slot lies
+inside one EAT calendar date, so `(staff_id, EAT date)` partitions availability
+with no overlap.
+
+Since slice 4 the two sides of that are no longer symmetrical, and the asymmetry
+is deliberate. Staff writes ignore opening hours (decision (f) below), so an
+overnight **appointment** is already recordable — a 23:30 walk-in running to
+03:30 exists today. That is handled rather than prevented: `loading.py` widens
+its appointment window by a day either side, `invalidation.on_appointment_write`
+drops both dates, and a test asserts the span shows busy on both. What is still
+refused is overnight **hours**, because those are what the grid, the window
+intersection and the key are derived from.
+
+Lifting the constraint therefore needs a `closes_next_day` boolean, a second
+window in `DayWindow`, and a decision about what a staff-day means once a shift
+crosses midnight — the key and the engine have to keep agreeing, and slice 4's
+machinery does not settle that.
 """
 
 from dataclasses import dataclass, field

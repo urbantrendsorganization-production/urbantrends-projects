@@ -1,0 +1,12 @@
+{
+  "name": "@booknasi/booking-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The client booking flow, framework-agnostic. Consumed by the standalone app and by slice 10's widget.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "node scripts/check-no-framework.mjs"
+  }
+}

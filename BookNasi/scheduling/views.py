@@ -44,12 +44,12 @@ from scheduling.dayview import appointments_for_day, top_services_for, totals_fo
 from scheduling.loading import staff_for_service
 from scheduling.models import Appointment
 from scheduling.serializers import (
+    AnyStaffSlotSerializer,
     AppointmentSerializer,
     ClientDetailsSerializer,
     DayTotalsSerializer,
     OptionSerializer,
     ServiceChipSerializer,
-    SlotSerializer,
     StaffChipSerializer,
     StaffSlotsSerializer,
     TransitionSerializer,
@@ -154,7 +154,7 @@ class PublicAvailabilityView(PublicViewMixin, AvailabilityForServiceMixin, APIVi
                 # rule and explicitly not an assignment algorithm. The staff
                 # member who owns each start is named so the confirm step has
                 # something to book against.
-                "any_staff": SlotSerializer(_earliest_per_start(by_staff), many=True).data,
+                "any_staff": AnyStaffSlotSerializer(_earliest_per_start(by_staff), many=True).data,
                 "by_staff": StaffSlotsSerializer(by_staff, many=True).data,
             }
         )
@@ -569,10 +569,28 @@ def _earliest_per_start(by_staff):
     """One slot per distinct start time, from whoever offers it.
 
     Deduplicated because the client picking "anyone" should see 10:00 once, not
-    once per stylist who happens to be free then.
+    once per stylist who happens to be free then. CLAUDE.md §12: this is
+    earliest-available-slot and explicitly not an assignment algorithm — the
+    first stylist in the list who is free at that time gets it, with no
+    balancing, no rotation and no scoring.
+
+    Each entry carries the staff member who owns it, because slice 5's confirm
+    step has to book against a concrete person: `Appointment.staff` is not
+    nullable and the exclusion constraint is per staff member. Without the id
+    here the client would have to guess, and "anyone" would become a second
+    availability query at the worst possible moment.
     """
     seen = {}
     for entry in by_staff:
         for slot in entry["slots"]:
-            seen.setdefault(slot.starts_at, slot)
+            seen.setdefault(
+                slot.starts_at,
+                {
+                    "starts_at": slot.starts_at,
+                    "ends_at": slot.ends_at,
+                    "duration_minutes": slot.duration_minutes,
+                    "staff_id": entry["staff_id"],
+                    "staff_name": entry["display_name"],
+                },
+            )
     return [seen[key] for key in sorted(seen)]

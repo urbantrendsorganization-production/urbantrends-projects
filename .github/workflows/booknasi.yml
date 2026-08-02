@@ -99,6 +99,7 @@ jobs:
             scheduling/tests/test_cache.py \
             scheduling/tests/test_transitions.py \
             scheduling/tests/test_walk_in.py \
+            scheduling/tests/test_holds.py \
             -v
 
       - name: Run tests
@@ -121,7 +122,7 @@ jobs:
         run: git diff --exit-code dist/
 
   frontend:
-    name: frontend (build)
+    name: frontend (core · invariants · test · build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -135,10 +136,22 @@ jobs:
           cache-dependency-path: BookNasi/web/package-lock.json
       - name: Install dependencies
         run: npm ci
+      # LOAD-BEARING. Slice 5 put the flow's state machine in
+      # packages/booking-core precisely so slice 10's widget is a build target
+      # and not a second implementation. A React import that creeps in here is
+      # not a lint issue — it is the decision being reversed by accident, and
+      # nothing else in the pipeline would notice until the widget is due.
+      - name: booking-core is framework-free
+        run: npm run core:check
       # CLAUDE.md §10. The tokens job proves the four invariants ship as
-      # constants rather than custom properties; this proves the staff screens
+      # constants rather than custom properties; this proves the screens
       # actually use them, which is the half a token file cannot see.
       - name: Design invariants (52px targets, 64px walk-in rows)
         run: npm run invariants
+      # The state machine and the two rendering assertions a token file cannot
+      # make: a 300-character service name that does not collapse a row, and a
+      # slot grid that is three per row because the invariant says so.
+      - name: Test
+        run: npm test
       - name: Build
         run: npm run build

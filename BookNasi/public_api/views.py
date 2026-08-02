@@ -9,16 +9,23 @@ third-party integrator consume this and only this.
 """
 
 from django.shortcuts import get_object_or_404
-from rest_framework import generics
+from rest_framework import generics, status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from public_api.serializers import (
+    HoldRequestSerializer,
+    PublicHoldSerializer,
     PublicServiceSerializer,
     PublicShopSerializer,
     PublicStaffSerializer,
 )
+from scheduling.abuse import HoldRefused
+from scheduling.booking import SlotTaken, SlotUnavailable
+from scheduling.holds import ServiceNotPubliclyBookable, create_hold, release_hold
+from scheduling.models import Appointment
+from scheduling.statuses import BookingSource
 from shops.durations import ServiceNotOffered
 from shops.models import Service, Shop, Staff, StaffService
 
@@ -26,6 +33,9 @@ from shops.models import Service, Shop, Staff, StaffService
 class PublicViewMixin:
     permission_classes = [AllowAny]
     authentication_classes = []
+    #: Crude per-IP ceiling. Explicitly not the control on hold abuse — see the
+    #: long note in `scheduling/abuse.py` about carrier-grade NAT.
+    throttle_scope = "public-read"
 
     def get_shop(self):
         # `.unscoped()` is correct here and is the reason it is greppable: this
@@ -107,3 +117,128 @@ def _resolve(service, staff_service):
     from shops.durations import resolve_duration
 
     return resolve_duration(service=service, staff_service=staff_service)
+
+
+# ------------------------------------------------------------------- the hold
+
+
+class HoldCreateView(PublicViewMixin, APIView):
+    """`POST /api/public/v1/shops/<slug>/holds/`
+
+    The whole of the confirm step, and the whole of slice 5's write path. It
+    creates a `pending_payment` appointment that occupies the slot against the
+    exclusion constraint and expires on its own.
+
+    Slice 6 adds one thing here and nothing else: an STK push after the hold
+    exists, and a callback that confirms it. The hold, its expiry, its release
+    and its countdown are all already here — which was the point of doing it
+    without Daraja first.
+
+    Every failure gets its own status code, because "you already have a slot
+    held", "that time was never bookable" and "somebody beat you by 200ms" are
+    three different things to say to a client mid-booking:
+
+    - `400` the request was wrong (bad number, unbookable service)
+    - `409` the slot went (`SlotUnavailable`, `SlotTaken`)
+    - `429` this number is holding too much (`HoldRefused`)
+    """
+
+    throttle_scope = "hold-create"
+
+    def post(self, request, slug):
+        shop = self.get_shop()
+        form = HoldRequestSerializer(data=request.data)
+        form.is_valid(raise_exception=True)
+        data = form.validated_data
+
+        service = get_object_or_404(
+            Service.objects.for_org(shop.organization)
+            .filter(shop=shop)
+            .prefetch_related("staff_links"),
+            pk=data["service"],
+        )
+        staff = get_object_or_404(
+            Staff.objects.for_org(shop.organization).filter(
+                shop=shop, is_active=True, is_bookable=True
+            ),
+            pk=data["staff"],
+        )
+
+        try:
+            appointment = create_hold(
+                shop=shop,
+                service=service,
+                staff=staff,
+                starts_at=data["starts_at"],
+                phone=data["phone"],
+                client_request_id=data.get("client_request_id") or None,
+            )
+        except ServiceNotPubliclyBookable:
+            # CLAUDE.md §5, at the API rather than only the UI. A deposit-free
+            # service is absent from the public list, so this is the request
+            # that did not come from the booking page.
+            return Response(
+                {"detail": "That service cannot be booked online. Call the shop."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except ServiceNotOffered:
+            return Response(
+                {"detail": "That stylist does not do that service."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except HoldRefused as exc:
+            body = {"detail": str(exc), "reason": exc.reason}
+            response = Response(body, status=status.HTTP_429_TOO_MANY_REQUESTS)
+            if exc.retry_after:
+                response["Retry-After"] = str(exc.retry_after)
+            return response
+        except (SlotTaken, SlotUnavailable) as exc:
+            # One sentence for both, two names in the logs — see booking.py.
+            return Response(
+                {"detail": str(exc), "reason": type(exc).__name__},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        return Response(PublicHoldSerializer(appointment).data, status=status.HTTP_201_CREATED)
+
+
+class HoldDetailView(PublicViewMixin, APIView):
+    """`GET /api/public/v1/holds/<id>/` — what the countdown screen polls.
+
+    The id is the session. There is no login and no token: a UUID primary key
+    is unguessable, and the response contains only what the caller already sent
+    plus the public service figures. Slice 1 chose UUID keys for exactly this.
+
+    Not shop-scoped in the URL, because the client following a link from the
+    confirm screen has an appointment id and no reason to also carry a slug.
+    """
+
+    def get(self, request, hold_id):
+        return Response(PublicHoldSerializer(self.get_hold(hold_id)).data)
+
+    def get_hold(self, hold_id):
+        # `.unscoped()` for the same reason `get_shop` uses it: there is no
+        # request user here. The unguessable id is the scope, and the serializer
+        # is what bounds what a holder of one can read.
+        return get_object_or_404(
+            Appointment.objects.unscoped().select_related("staff", "service", "shop"),
+            pk=hold_id,
+            source=BookingSource.ONLINE,
+        )
+
+
+class HoldReleaseView(HoldDetailView):
+    """`POST /api/public/v1/holds/<id>/release/` — the client changed their mind.
+
+    Not counted as an abandonment by `scheduling/abuse.py`. That is deliberate:
+    penalising the cancel button teaches people to close the tab instead, and a
+    closed tab is the case that actually costs the shop a slot for three
+    minutes.
+    """
+
+    throttle_scope = "hold-create"
+
+    def post(self, request, hold_id):
+        appointment = self.get_hold(hold_id)
+        release_hold(appointment, expired=False)
+        return Response(PublicHoldSerializer(appointment).data)

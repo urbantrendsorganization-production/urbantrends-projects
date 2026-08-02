@@ -63,6 +63,30 @@ shop, and the subscription churns three weeks later for reasons nobody can
 point at. CLAUDE.md §4 and §7 name that failure; these are what make it a red
 build instead.
 
+## The hold (slice 5)
+
+- `scheduling/tests/test_holds.py` — the hold takes the slot and gives it back.
+  Both directions are load-bearing and they fail in opposite ways. A hold that
+  never releases is a slot nobody can book again — not a double-booking, but
+  indistinguishable from one to the client who cannot have it, and invisible to
+  the shop until somebody complains. A hold that releases *early* takes a slot
+  from a client who is mid-payment, which in slice 6 becomes a refund and the
+  `slotLost` support call CLAUDE.md §12 still has open.
+
+  So release is proved from four directions: the scheduled task, the Beat sweep,
+  an early resolution that revokes the task, and a task that fires before expiry
+  and correctly does nothing. The file also pins the cost of the no-OTP decision
+  — per-phone hold limits and the abandonment cooldown from `scheduling/abuse.py`
+  — and that two clients confirming the same instant get one 201 and one clean
+  409, never a 500.
+
+The frontend half of the same slice is `web/packages/booking-core`, checked by
+`npm run core:check`. It is listed here because it protects a decision rather
+than an implementation: the flow's state machine lives outside React so that
+slice 10's embedded widget is a build target and not a second implementation. A
+`react` import in that package is that decision being reversed by accident, and
+nothing else in the pipeline would notice until the widget is due.
+
 ## The rules
 
 **They are not allowed to fail, and they are not allowed to quietly disappear.**
@@ -80,19 +104,30 @@ uv run pytest \
   scheduling/tests/test_cross_process_race.py \
   scheduling/tests/test_cache.py \
   scheduling/tests/test_transitions.py \
-  scheduling/tests/test_walk_in.py
+  scheduling/tests/test_walk_in.py \
+  scheduling/tests/test_holds.py
 ```
 
-The frontend has one of its own, run in the `frontend` CI job:
+The frontend has three of its own, run in the `frontend` CI job:
 
 ```bash
+npm run core:check   # packages/booking-core/scripts/check-no-framework.mjs
 npm run invariants   # web/scripts/check-invariants.mjs
+npm test             # the state machine, and what only a renderer can assert
 ```
 
 CLAUDE.md §10's four invariants ship as constants in `packages/tokens`; the
-tokens job proves they are not CSS custom properties, and this proves the staff
-screens actually use them. A 44 px button on the wet-hands screen is not a
-styling regression, it is a mis-tap that books the wrong time.
+tokens job proves they are not CSS custom properties, and `npm run invariants`
+proves the screens actually use them. A 44 px button on the wet-hands screen is
+not a styling regression, it is a mis-tap that books the wrong time — and slice
+5 shipped exactly that mistake on a Back button, caught here rather than in a
+salon.
+
+`npm run core:check` refuses a framework import, a browser global or a timer
+inside `booking-core`. `npm test` covers the state machine and the two things a
+constant cannot check: that a 300-character service name renders whole without
+collapsing the row, and that the slot grid is three per row *because the
+invariant says so* rather than because someone typed 3.
 
 If a future slice needs to change what these assert, that is a conversation, not
 a commit.

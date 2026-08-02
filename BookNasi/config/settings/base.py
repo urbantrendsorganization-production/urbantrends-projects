@@ -72,6 +72,25 @@ CELERY_RESULT_BACKEND = REDIS_URL
 CELERY_TASK_ALWAYS_EAGER = False
 CELERY_TIMEZONE = "UTC"
 
+# Slice 5's release sweep. See scheduling/tasks.py for why a Beat sweep exists
+# alongside a per-appointment `eta` task: the scheduled task is for timeliness
+# and this is for correctness. A lost broker, a redeployed worker or a dropped
+# task id costs a minute here instead of a permanently held slot.
+#
+# Declared in code rather than in django-celery-beat's database scheduler on
+# purpose: one periodic task does not justify a dependency, a migration and an
+# admin row that can be edited into silence without anyone noticing.
+CELERY_BEAT_SCHEDULE = {
+    "release-expired-holds": {
+        "task": "scheduling.sweep_expired_holds",
+        "schedule": 60.0,
+        # If Beat was down, run once on recovery rather than replaying every
+        # minute it missed. The sweep is idempotent, so the replay would be
+        # harmless — just pointless load at the worst possible moment.
+        "options": {"expires": 55.0},
+    },
+}
+
 AUTH_USER_MODEL = "accounts.User"
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -101,6 +120,17 @@ REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
     "UNAUTHENTICATED_USER": "django.contrib.auth.models.AnonymousUser",
     "EXCEPTION_HANDLER": "core.exceptions.exception_handler",
+    "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.ScopedRateThrottle"],
+    # A crude ceiling on the unauthenticated surface, and explicitly **not** the
+    # real control on hold abuse — see the long note in `scheduling/abuse.py`.
+    # Safaricom and Airtel put large numbers of Kenyan subscribers behind
+    # carrier-grade NAT, so a per-IP limit tight enough to stop a determined
+    # script would block a neighbourhood on a Saturday morning. The per-phone
+    # limits in that module are what actually bound the exposure.
+    "DEFAULT_THROTTLE_RATES": {
+        "public-read": "240/hour",
+        "hold-create": "12/hour",
+    },
 }
 
 SESSION_COOKIE_HTTPONLY = True

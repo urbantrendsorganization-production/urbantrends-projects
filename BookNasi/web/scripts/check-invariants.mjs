@@ -45,13 +45,32 @@ if (!primitives.includes("INVARIANTS.walkInRowMinHeightPx")) {
 // 2. Nothing anywhere in the staff screens sets an interactive height below the
 //    floor. Matches `minHeight: 44`, `minHeight: "44px"` and `height: 44`.
 const HEIGHT = /\b(?:min-?[Hh]eight|height)\s*[:=]\s*"?(\d+)(?:px)?"?/g;
+
+/**
+ * The one exemption, and the reason it is safe.
+ *
+ * Slice 5 introduced a 6px element: the hold countdown's progress track. It is
+ * `aria-hidden`, so it is not in the accessibility tree, not focusable and not
+ * reachable by any user by any means — it cannot be a tap target, and forcing
+ * it to 52px would put a thick bar across the screen the invariant exists to
+ * keep usable.
+ *
+ * `aria-hidden` is the signal rather than a comment marker because it cannot be
+ * added to silence this check without also making the element genuinely
+ * unreachable. A developer who puts it on a button has a worse bug than a small
+ * target, and one this check was never the right place to catch.
+ */
+function isDecoration(source, index) {
+  return source.slice(Math.max(0, index - 240), index).includes("aria-hidden");
+}
+
 for (const file of [...walk(join(ROOT, "components")), ...walk(join(ROOT, "app"))]) {
   const source = readFileSync(file, "utf8");
   for (const match of source.matchAll(HEIGHT)) {
     const value = Number(match[1]);
     // Below the floor is a failure. Anything at or above it is a deliberate
     // larger target (the 56px CTA, the 64px FAB and walk-in rows) and fine.
-    if (value > 0 && value < MIN_TARGET) {
+    if (value > 0 && value < MIN_TARGET && !isDecoration(source, match.index)) {
       failures.push(`${file.replace(ROOT, "")}: interactive height ${value}px is below the ${MIN_TARGET}px floor`);
     }
   }

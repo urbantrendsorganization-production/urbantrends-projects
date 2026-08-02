@@ -167,6 +167,30 @@ class OpeningHours(OrgDerivedModel):
     A single interval per weekday, matching the per-day toggles the design
     draws. A shop that closes over lunch would need two rows; if that turns out
     to be real, the change is dropping the unique constraint, not a reshape.
+
+    ## The overnight asymmetry — read before lifting the constraint below
+
+    `opening_hours_close_after_open` refuses a shop that closes after midnight
+    (21:00–01:00). Slice 3 leaned on that: because every offerable slot lies
+    inside one EAT calendar date, the availability cache can partition on
+    `(staff_id, EAT date)` with no overlap. See `scheduling/availability.py`,
+    decision (e), and `scheduling/cache.py`'s `key_for`.
+
+    Slice 4 then broke the symmetry from the other side. Staff writes ignore
+    opening hours entirely (decision (f)), so an appointment *can already* span
+    local midnight — a 23:30 walk-in is recordable today. That case is handled
+    rather than prevented: `scheduling/loading.py` widens its appointment window
+    by a day either side, `invalidation.on_appointment_write` drops both dates,
+    and there is a test asserting an overnight span shows busy on both days.
+
+    So the state of play is: **overnight work is recordable and visible, and
+    overnight opening hours are refused.** Lifting this constraint is therefore
+    not a one-line change to the constraint. It needs a `closes_next_day`
+    boolean, a second window in `DayWindow`, and — the part that is easy to miss
+    — a decision about what a "staff-day" means once a shift crosses midnight,
+    because the cache key and the engine must keep agreeing about it. The
+    machinery slice 4 added covers *stored* overnight rows; it does not make the
+    grid, the window intersection or the key correct for overnight *hours*.
     """
 
     org_source = "shop"
@@ -181,6 +205,10 @@ class OpeningHours(OrgDerivedModel):
         ordering = ["weekday", "opens_at"]
         constraints = [
             models.UniqueConstraint(fields=["shop", "weekday"], name="one_opening_row_per_weekday"),
+            # This is the constraint the class docstring is about. It is load
+            # bearing for the availability cache's partition, not merely a
+            # sanity check on a form. Do not drop it without reading that note
+            # and `scheduling/availability.py`'s decision (e).
             models.CheckConstraint(
                 condition=Q(closes_at__gt=F("opens_at")), name="opening_hours_close_after_open"
             ),

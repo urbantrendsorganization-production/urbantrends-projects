@@ -80,6 +80,13 @@ def key_for(staff_id, day):
     function that maps an instant onto one — so the key and the engine cannot
     disagree about where a staff-day starts. See decision (e) in
     `availability.py`.
+
+    This partition is only sound because `shops.models.OpeningHours` refuses
+    trading hours that cross midnight — the two are cross-referenced in both
+    directions on purpose. An overnight *appointment* is fine and already
+    happens (slice 4); it lands in two entries, and `invalidation` drops both.
+    An overnight *shift* is what would break the partition, which is why
+    lifting that constraint is not a one-line change.
     """
     return f"bn:avail:{KEY_VERSION}:{staff_id}:{day.isoformat()}"
 

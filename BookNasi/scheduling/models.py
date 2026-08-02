@@ -126,6 +126,25 @@ class Appointment(OrgDerivedModel):
         max_length=64, null=True, blank=True, editable=False
     )
 
+    #: When a `pending_payment` hold stops holding. Set at creation from
+    #: `Shop.hold_ttl_minutes`, because a pending_payment row *is* a hold and
+    #: there is no state in which one exists without an expiry. Server
+    #: authoritative: the countdown on the client is a rendering of this and
+    #: never the thing that decides.
+    hold_expires_at = models.DateTimeField(null=True, blank=True, editable=False)
+    #: The Celery task that will release it. Stored so the task can be revoked
+    #: when the hold is resolved early. Revoking is an optimisation only — the
+    #: task re-checks the row's status before doing anything, and the Beat sweep
+    #: is what actually guarantees release. See `scheduling/tasks.py`.
+    hold_release_task_id = models.CharField(  # noqa: DJ001 — null means "never scheduled"
+        max_length=64, null=True, blank=True, editable=False
+    )
+    #: Stamped when a hold was released by *expiry* rather than by a client who
+    #: cancelled. The difference is what `scheduling/abuse.py` throttles on: a
+    #: client who cancels politely is not penalised, one who walks away from
+    #: held slots repeatedly is.
+    hold_released_at = models.DateTimeField(null=True, blank=True, editable=False)
+
     class Meta:
         db_table = "appointments"
         ordering = ["time_range"]
@@ -217,6 +236,16 @@ class Appointment(OrgDerivedModel):
         stored a second time, which is the reason that snapshot is taken.
         """
         return self.starts_at + timedelta(minutes=self.duration_snapshot)
+
+    @property
+    def is_hold_expired(self):
+        from django.utils import timezone
+
+        return (
+            self.status == AppointmentStatus.PENDING_PAYMENT
+            and self.hold_expires_at is not None
+            and self.hold_expires_at <= timezone.now()
+        )
 
     @property
     def is_waiting(self):

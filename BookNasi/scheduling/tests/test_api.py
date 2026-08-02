@@ -4,6 +4,12 @@ The public route and the org-scoped route differ in exactly two things: who may
 ask, and which `Policy` applies. Anything else that diverges means a client and
 a stylist are looking at different calendars, which is the failure that ends
 with two people in one chair and both of them holding a phone.
+
+Slice 5 adds the other half. The two surfaces agree on what they **offer** and
+diverge on what they let you **write**: shop configuration binds the public
+booking page and advises the staff screen. `TestTheTwoSurfacesAgree` pins the
+first; `TestTheTwoSurfacesDivergeOnWrites` pins the second, at the real
+endpoints, in both directions — including the one rule that binds everyone.
 """
 
 from datetime import timedelta
@@ -11,6 +17,7 @@ from datetime import timedelta
 import pytest
 from django.urls import reverse
 
+from scheduling.tests.conftest import eat
 from shops.models import Leave, ShopClosure, StaffService
 
 pytestmark = pytest.mark.django_db
@@ -263,3 +270,125 @@ class TestTheTwoSurfacesAgree:
         for url in (public_url(shop_setup), staff_url(shop_setup)):
             assert api_client.post(url, {}, format="json").status_code == 405
             assert api_client.delete(url).status_code == 405
+
+
+class TestTheTwoSurfacesDivergeOnWrites:
+    """The other half of the agreement above, and the one that took a slice to
+    settle. Both surfaces *offer* the same tidy grid — `derive_slots` is always
+    bounded by the working window, whatever the policy says — so the divergence
+    is not in what is shown. It is in what may be **written**.
+
+    Slice 4 made shop configuration binding for the public and advisory for
+    staff: opening hours, dated closures, the slot grid and the turnaround
+    buffer. Slice 5 is the mirror, and this class is the pair of assertions that
+    pins it. Each test drives the same instant at the two real endpoints — the
+    public hold and the staff walk-in — and asserts the answers differ in the
+    permitted direction and only there.
+
+    The last test is the important one: collisions are not advisory for anyone.
+    That is the line `enforce_shop_config` must never be read as crossing.
+    """
+
+    def hold_at(self, api_client, shop_setup, when, phone="0712345678"):
+        return api_client.post(
+            reverse("public_api:hold-create", kwargs={"slug": shop_setup.shop.slug}),
+            {
+                "service": str(shop_setup.braids.id),
+                "staff": str(shop_setup.wanjiku.id),
+                "starts_at": when.isoformat(),
+                "phone": phone,
+            },
+            format="json",
+        )
+
+    def walk_in_at(self, api_client, shop_setup, when, **extra):
+        api_client.force_login(shop_setup.org.owner)
+        return api_client.post(
+            reverse(
+                "scheduling:walk-in",
+                args=[shop_setup.organization.id, shop_setup.shop.id],
+            ),
+            {
+                "service": str(shop_setup.braids.id),
+                "staff": str(shop_setup.wanjiku.id),
+                "starts_at": when.isoformat(),
+                **extra,
+            },
+            format="json",
+        )
+
+    def test_a_time_that_is_on_no_grid_is_refused_publicly_and_recorded_by_staff(
+        self, api_client, shop_setup, wednesday
+    ):
+        """11:04. A client cannot ask for it — the design's chips are clock
+        times and an off-grid start read back as "11:04" looks like a mistake.
+        A stylist recording what is happening in front of them can, because
+        11:04 is when the client actually sat down."""
+        off_grid = eat(wednesday, 11, 4)
+
+        assert self.hold_at(api_client, shop_setup, off_grid).status_code == 409
+        assert self.walk_in_at(api_client, shop_setup, off_grid).status_code == 201
+
+    def test_a_start_after_working_hours_is_refused_publicly_and_recorded_by_staff(
+        self, api_client, shop_setup, wednesday
+    ):
+        """CLAUDE.md's 6:15 pm walk-in, at the endpoints. The fixture's stylists
+        work until 18:00, so 18:30 is outside the window on both surfaces — and
+        only one of them may refuse it."""
+        late = eat(wednesday, 18, 30)
+
+        assert self.hold_at(api_client, shop_setup, late).status_code == 409
+        assert self.walk_in_at(api_client, shop_setup, late).status_code == 201
+
+    def test_a_dated_closure_is_absolute_publicly_and_advisory_for_staff(
+        self, api_client, shop_setup, wednesday
+    ):
+        """A shop that shut for a funeral and then opened at four. The closure
+        is the fact that wins for a client picking a time next week; it is a
+        note on the wall for the stylist standing in the open shop."""
+        ShopClosure.objects.create(
+            shop=shop_setup.shop, starts_on=wednesday, ends_on=wednesday, reason="Funeral"
+        )
+
+        assert self.hold_at(api_client, shop_setup, eat(wednesday, 10)).status_code == 409
+        assert self.walk_in_at(api_client, shop_setup, eat(wednesday, 10)).status_code == 201
+
+    def test_a_collision_is_refused_on_both_surfaces(self, api_client, shop_setup, wednesday):
+        """The line that does not move. Two people cannot occupy one chair, the
+        exclusion constraint refuses the row regardless of policy, and the only
+        difference between the two surfaces is what the refusal *says*: the
+        client is told the slot went, the stylist is handed ranked options.
+        """
+        taken = eat(wednesday, 10)
+        assert self.hold_at(api_client, shop_setup, taken).status_code == 201
+
+        client_refusal = self.hold_at(api_client, shop_setup, taken, phone="0722000002")
+        staff_refusal = self.walk_in_at(api_client, shop_setup, taken)
+
+        assert client_refusal.status_code == 409
+        assert staff_refusal.status_code == 409
+        assert staff_refusal.json()["options"], "a staff collision must arrive as a choice"
+
+    def test_the_public_lead_time_is_the_only_divergence_on_the_offer_list(
+        self, api_client, shop_setup, wednesday
+    ):
+        """Stated as a test so it is not re-derived by hand later: the offer
+        lists diverge on lead time and horizon and on nothing else. Shop
+        configuration shapes both lists identically — it is only the write that
+        it stops binding.
+        """
+        shop_setup.shop.min_lead_minutes = 0
+        shop_setup.shop.booking_horizon_days = 365
+        shop_setup.shop.save(update_fields=["min_lead_minutes", "booking_horizon_days"])
+
+        public = api_client.get(
+            public_url(shop_setup),
+            {"date": wednesday.isoformat(), "staff": str(shop_setup.wanjiku.id)},
+        ).json()
+        api_client.force_login(shop_setup.org.owner)
+        staff = api_client.get(
+            staff_url(shop_setup),
+            {"date": wednesday.isoformat(), "service": str(shop_setup.braids.id)},
+        ).json()
+
+        assert public["by_staff"][0]["slots"] == staff["by_staff"][0]["slots"]

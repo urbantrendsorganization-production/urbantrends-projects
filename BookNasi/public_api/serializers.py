@@ -96,6 +96,86 @@ class PublicServiceSerializer(serializers.Serializer):
         return max(service.price - service.deposit_amount, 0)
 
 
+class HoldRequestSerializer(serializers.Serializer):
+    """What the confirm step sends. Input only.
+
+    No name and no email. CLAUDE.md §12: the phone number is the whole of the
+    client's identity, and the STK push to it is the verification. Asking for
+    anything else here would be a field that costs bookings and buys nothing —
+    the shop learns the name when the client sits down.
+    """
+
+    service = serializers.UUIDField()
+    #: Required, even when the client picked "anyone available". The
+    #: availability response names the stylist who owns each start precisely so
+    #: this can be concrete — `Appointment.staff` is not nullable and the
+    #: exclusion constraint is per staff member.
+    staff = serializers.UUIDField()
+    starts_at = serializers.DateTimeField()
+    phone = serializers.CharField(max_length=20)
+    #: Same guard as the staff app's walk-in: a client on 3G who taps Confirm,
+    #: sees nothing, and taps again must not create two holds and be told the
+    #: second collided with the first.
+    client_request_id = serializers.CharField(required=False, allow_blank=True, max_length=64)
+
+    def validate_phone(self, value):
+        from accounts.phone import InvalidPhoneNumber, normalize_phone
+
+        try:
+            return normalize_phone(value)
+        except InvalidPhoneNumber as exc:
+            # The library message names the accepted formats, which is what a
+            # client mistyping their own number actually needs.
+            raise serializers.ValidationError(str(exc)) from exc
+
+
+class PublicHoldSerializer(serializers.Serializer):
+    """The held slot, as the client's countdown screen needs it.
+
+    Deliberately thin. This is an unauthenticated endpoint keyed by an
+    unguessable id, and everything it returns is either something the caller
+    just sent or something already on the public service list. No client name,
+    no other bookings, nothing about the shop's day.
+    """
+
+    id = serializers.UUIDField(read_only=True)
+    status = serializers.CharField(read_only=True)
+    starts_at = serializers.DateTimeField(read_only=True)
+    ends_at = serializers.DateTimeField(read_only=True)
+    local_time = serializers.SerializerMethodField()
+    hold_expires_at = serializers.DateTimeField(read_only=True)
+    #: Seconds left, computed server-side at the moment of the response. The
+    #: countdown is a rendering of this and never the thing that decides — a
+    #: client whose clock is wrong must still be told the truth about the slot.
+    seconds_remaining = serializers.SerializerMethodField()
+    staff_name = serializers.SerializerMethodField()
+    service_name = serializers.SerializerMethodField()
+    price_kes = serializers.IntegerField(source="price_snapshot", read_only=True)
+    deposit_kes = serializers.IntegerField(source="deposit_snapshot", read_only=True)
+    balance_kes = serializers.SerializerMethodField()
+
+    def get_local_time(self, appointment):
+        from scheduling.availability import LOCAL_TZ
+
+        return appointment.starts_at.astimezone(LOCAL_TZ).strftime("%H:%M")
+
+    def get_seconds_remaining(self, appointment):
+        from django.utils import timezone
+
+        if appointment.hold_expires_at is None:
+            return 0
+        return max(0, int((appointment.hold_expires_at - timezone.now()).total_seconds()))
+
+    def get_staff_name(self, appointment):
+        return appointment.staff.display_name
+
+    def get_service_name(self, appointment):
+        return appointment.service.name
+
+    def get_balance_kes(self, appointment):
+        return max(appointment.price_snapshot - appointment.deposit_snapshot, 0)
+
+
 class PublicStaffSerializer(serializers.Serializer):
     """No membership, no user id, no phone. A client picking a stylist needs a
     name and a duration, and nothing that identifies an account."""

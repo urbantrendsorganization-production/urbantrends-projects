@@ -292,6 +292,15 @@ def create_appointment(
         duration_snapshot=duration,
         client_request_id=client_request_id or None,
         started_at=now if resolved_status == AppointmentStatus.IN_PROGRESS else None,
+        # A `pending_payment` row *is* a hold, so it is never written without an
+        # expiry. Set here rather than by the caller so no code path can create
+        # one the sweep in `tasks.py` would then find with a null expiry and
+        # have to guess about.
+        hold_expires_at=(
+            now + timedelta(minutes=staff.shop.hold_ttl_minutes)
+            if resolved_status == AppointmentStatus.PENDING_PAYMENT
+            else None
+        ),
     )
 
     try:
