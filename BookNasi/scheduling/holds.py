@@ -89,7 +89,7 @@ def create_hold(*, shop, service, staff, starts_at, phone, now=None, client_requ
         raise ServiceNotPubliclyBookable(service.name)
 
     client = client_for_phone(shop.organization, phone)
-    check_can_hold(client, now=now)
+    check_can_hold(client, staff=staff, now=now)
 
     appointment = create_appointment(
         staff=staff,

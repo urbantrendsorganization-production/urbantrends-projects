@@ -415,6 +415,81 @@ class TestACollisionIsAChoice:
         assert kinds[0] == "other_staff"
 
 
+class TestShorteningIsRecordedRatherThanResolved:
+    """Settled 2 August 2026. Time drifts, money does not, and the drift is
+    stamped so a dashboard can show it instead of absorbing it.
+
+    The alternative that was rejected — prompting for an adjusted price — would
+    have added a fourth tap to a three-tap flow at the moment a staff member is
+    resolving a collision with a client in front of them, and asked a stylist to
+    make the owner's pricing decision in public.
+    """
+
+    def test_a_shortened_walk_in_records_the_shorter_time_at_the_full_price(
+        self, shop_setup, wednesday
+    ):
+        appointment = create_appointment(
+            staff=shop_setup.grace,
+            service=shop_setup.shave,
+            starts_at=eat(wednesday, 10),
+            source=BookingSource.WALK_IN,
+            now=eat(wednesday, 10),
+            duration_minutes=16,
+        )
+
+        assert appointment.duration_snapshot == 16
+        assert appointment.price_snapshot == shop_setup.shave.price
+        assert appointment.was_shortened is True
+
+    def test_an_ordinary_walk_in_is_not_flagged(self, shop_setup, wednesday):
+        """Otherwise the flag means nothing: a column that is true on every row
+        cannot measure a drift."""
+        appointment = create_appointment(
+            staff=shop_setup.grace,
+            service=shop_setup.shave,
+            starts_at=eat(wednesday, 10),
+            source=BookingSource.WALK_IN,
+            now=eat(wednesday, 10),
+        )
+
+        assert appointment.was_shortened is False
+
+    def test_passing_the_resolved_duration_explicitly_is_not_a_shortening(
+        self, shop_setup, wednesday
+    ):
+        """The client sends `duration_minutes` on every retry of an optimistic
+        walk-in write. A retry that carried the same number it was given must
+        not slowly turn every walk-in in the shop into a flagged one."""
+        appointment = create_appointment(
+            staff=shop_setup.grace,
+            service=shop_setup.shave,
+            starts_at=eat(wednesday, 10),
+            source=BookingSource.WALK_IN,
+            now=eat(wednesday, 10),
+            duration_minutes=shop_setup.shave.duration_minutes,
+        )
+
+        assert appointment.was_shortened is False
+
+    def test_finishing_early_is_a_different_thing_and_does_not_set_it(self, shop_setup, wednesday):
+        """ "Finish now" trims `time_range` so the chair is free. It does not
+        change what was booked or what was charged, and conflating the two would
+        flag every stylist who works fast."""
+        appointment = create_appointment(
+            staff=shop_setup.grace,
+            service=shop_setup.braids,
+            starts_at=eat(wednesday, 10),
+            source=BookingSource.WALK_IN,
+            now=eat(wednesday, 10),
+        )
+        apply_transition(appointment, AppointmentStatus.COMPLETED, now=eat(wednesday, 11))
+
+        appointment.refresh_from_db()
+        assert appointment.was_shortened is False
+        assert appointment.duration_snapshot == shop_setup.braids.duration_minutes
+        assert appointment.finished_at is not None
+
+
 class TestBackfillOverCompletedWork:
     """The concrete case that makes the ACTIVE/BLOCKING divergence load-bearing.
 

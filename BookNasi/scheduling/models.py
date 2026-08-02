@@ -104,6 +104,28 @@ class Appointment(OrgDerivedModel):
     #: recovered when a staff member undoes a mis-tapped "Finish now".
     duration_snapshot = models.PositiveSmallIntegerField(validators=[MinValueValidator(1)])
 
+    #: This appointment was booked shorter than the service's resolved duration,
+    #: at full price.
+    #:
+    #: It happens on one path: a walk-in that collided, where the engine offered
+    #: "shorten to 12:00" and the staff member took it — see
+    #: `scheduling/collisions.py`. `duration_snapshot` records the shortened
+    #: length because that is the time sold; `price_snapshot` stays at the full
+    #: price because nobody renegotiated it with the client standing there, and
+    #: asking a stylist to set a price mid-collision is the shop owner's
+    #: decision being pushed onto the wrong person.
+    #:
+    #: The flag exists so that drift is **measurable rather than invisible**.
+    #: Revenue-per-staff stays true to what the shop charged; any future
+    #: revenue-per-*hour* would silently flatter whoever shortens most, which is
+    #: also whoever is under most pressure. With this column the dashboard can
+    #: show the distortion next to the number instead of absorbing it.
+    #:
+    #: Not the same thing as finishing early. "Finish now" at 11:00 on a booking
+    #: that ran to 13:30 trims `time_range` and stamps `finished_at`; it does not
+    #: change what was booked or what was charged, so it does not set this.
+    was_shortened = models.BooleanField(default=False, editable=False)
+
     #: When the chair was actually taken and given up. Distinct from
     #: `time_range`, which is what was booked until the appointment completes.
     #: Null on a row that has not started; the design's "waiting, not started"

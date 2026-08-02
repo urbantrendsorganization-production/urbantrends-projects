@@ -244,7 +244,9 @@ def create_appointment(
     one caller: a staff member who has been shown an overlap and chosen
     "shorten to 12:00". It never shortens silently — the value comes back from
     an `Option` the engine itself produced. `duration_snapshot` records the
-    shortened length, because that is what was sold.
+    shortened length, because that is what was sold, `price_snapshot` stays at
+    the full price, and `was_shortened` records that the two disagree so a
+    dashboard can show the drift rather than absorb it.
 
     Returns the created `Appointment`.
     """
@@ -264,7 +266,12 @@ def create_appointment(
     link = next((row for row in service.staff_links.all() if row.staff_id == staff.id), None)
     # Raises ServiceNotOffered when this person does not do this job. Not caught
     # here: it is a programming error on the write path, not a busy calendar.
-    duration = duration_minutes or resolve_duration(service=service, staff_service=link)
+    resolved = resolve_duration(service=service, staff_service=link)
+    duration = duration_minutes or resolved
+    # Recorded, not corrected. The shortened length is what was sold and
+    # `price_snapshot` below stays at the full price — see `was_shortened` on
+    # the model for why that drift is stamped rather than resolved here.
+    shortened = duration < resolved
 
     day = local_date(starts_at)
     facts = facts_for_staff_day(staff, day)
@@ -290,6 +297,7 @@ def create_appointment(
         # snapshot records zero rather than an amount nobody was asked for.
         deposit_snapshot=0 if source == BookingSource.WALK_IN else service.deposit_amount,
         duration_snapshot=duration,
+        was_shortened=shortened,
         client_request_id=client_request_id or None,
         started_at=now if resolved_status == AppointmentStatus.IN_PROGRESS else None,
         # A `pending_payment` row *is* a hold, so it is never written without an

@@ -36,7 +36,7 @@ from scheduling.abuse import (
     ABANDONED_COOLDOWN,
     MAX_ABANDONED_HOLDS,
     MAX_HOLDS_PER_PHONE_PER_DAY,
-    MAX_OPEN_HOLDS_PER_PHONE,
+    MAX_OPEN_HOLDS_PER_STAFF,
     HoldRefused,
     check_can_hold,
 )
@@ -339,8 +339,8 @@ class TestDepositFreeServicesAreUnreachable:
 class TestAbuseLimits:
     """The price of the no-OTP decision, asserted. See `scheduling/abuse.py`."""
 
-    def test_one_open_hold_per_number(self, shop_setup, wednesday):
-        assert MAX_OPEN_HOLDS_PER_PHONE == 1
+    def test_one_open_hold_per_number_per_stylist(self, shop_setup, wednesday):
+        assert MAX_OPEN_HOLDS_PER_STAFF == 1
         # One `now` for both, because a hold three minutes old has expired and
         # the limit is about *open* holds. Two different clocks would make this
         # pass for the wrong reason.
@@ -351,6 +351,65 @@ class TestAbuseLimits:
             hold(shop_setup, eat(wednesday, 14), now=now)
 
         assert caught.value.reason == "open_hold"
+
+    def test_a_parent_can_hold_two_stylists_for_two_children(self, shop_setup, wednesday):
+        """The case the ceiling is scoped per stylist to protect.
+
+        One phone, two children, two chairs at the same time. This is what a
+        Saturday morning at a salon looks like, and a one-hold-per-number
+        ceiling refuses it outright — at the confirm step, with "you already
+        have a slot held", and no remedy but to abandon a wanted booking.
+        """
+        now = eat(wednesday, 8)
+
+        first = hold(shop_setup, eat(wednesday, 9), now=now, staff=shop_setup.wanjiku)
+        second = hold(shop_setup, eat(wednesday, 9), now=now, staff=shop_setup.grace)
+
+        assert first.staff_id != second.staff_id
+        assert first.client_id == second.client_id, "one phone is one client"
+
+    def test_the_refusal_names_the_stylist_it_is_about(self, shop_setup, wednesday):
+        """Scoping the ceiling makes the message ambiguous unless it says who.
+        "You already have a slot held" reads as a refusal of the whole booking;
+        the actual remedy is to pick a different stylist."""
+        now = eat(wednesday, 8)
+        hold(shop_setup, eat(wednesday, 9), now=now, staff=shop_setup.wanjiku)
+
+        with pytest.raises(HoldRefused) as caught:
+            hold(shop_setup, eat(wednesday, 14), now=now, staff=shop_setup.wanjiku)
+
+        assert "Wanjiku" in str(caught.value)
+
+    def test_two_slots_with_the_same_stylist_still_wait_for_the_first_to_resolve(
+        self, shop_setup, wednesday
+    ):
+        """Documented rather than fixed, because slice 6 fixes it.
+
+        Two children with the *same* stylist on one number is still refused
+        while a hold is open. Once there is a payment the first hold leaves
+        `pending_payment` within seconds of the PIN and the second booking
+        proceeds, so this is a sequencing constraint for as long as slice 5
+        stands alone — not a permanent one. Loosening it further would give up
+        the only thing the open-hold ceiling actually prevents: one number
+        sitting on two of one stylist's slots at once.
+        """
+        now = eat(wednesday, 8)
+        first = hold(shop_setup, eat(wednesday, 9), now=now, staff=shop_setup.wanjiku)
+
+        with pytest.raises(HoldRefused):
+            hold(shop_setup, eat(wednesday, 14), now=now, staff=shop_setup.wanjiku)
+
+        # The slice 6 shape, simulated with a direct write because the edge does
+        # not exist yet: `STAFF_TRANSITIONS` has no pending_payment -> confirmed,
+        # deliberately. Confirming a hold is what a paid callback does, not
+        # something a staff member may do — granting it to staff would hand out
+        # the deposit-free booking CLAUDE.md §5 exists to prevent. Slice 6 adds
+        # that transition to a separate system table.
+        Appointment.objects.unscoped().filter(pk=first.pk).update(
+            status=AppointmentStatus.CONFIRMED, hold_expires_at=None
+        )
+
+        assert hold(shop_setup, eat(wednesday, 14), now=now, staff=shop_setup.wanjiku)
 
     def test_cancelling_frees_the_number_immediately(self, shop_setup, wednesday):
         """Otherwise the limit becomes a three-minute lockout on the client's
