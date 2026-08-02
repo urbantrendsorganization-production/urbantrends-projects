@@ -59,8 +59,12 @@ from django.core.cache import cache
 from scheduling.availability import local_date
 from scheduling.loading import gather_shop_day
 
-#: Bump when the shape of StaffDayFacts changes.
-KEY_VERSION = "v1"
+#: Bump when the shape of StaffDayFacts changes. v2: slice 4 gave each busy
+#: interval an `is_active` flag, so entries written by slice 3 would unpickle
+#: into a shape the collision resolver reads wrongly. A version bump is a clean
+#: miss; leaving it at v1 would have been a silent five-minute window of
+#: availability derived from the wrong facts on every deployed process.
+KEY_VERSION = "v2"
 #: Short by design — the backstop for an invalidation that did not land.
 TTL_SECONDS = 300
 LOCK_TTL_SECONDS = 10

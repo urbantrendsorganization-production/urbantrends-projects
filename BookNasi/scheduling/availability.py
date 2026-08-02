@@ -44,6 +44,12 @@ exactly one buffer, in both directions, which is what a shop actually means by
 "give me fifteen minutes between clients". The trailing buffer is not required
 against closing time: there is no next client to turn the chair around for.
 
+**(f) Shop configuration binds the public and advises staff.** Slice 4. Opening
+hours, closures, the grid and the buffer are rules on the public booking page
+and advice on the staff screen — a 6:15 pm walk-in when hours end at 6:00 pm
+must be recordable, and so must one at 11:04, which is on no grid. Collisions
+are never advisory. See `Policy`.
+
 **(e) A staff-day is a calendar date in EAT.** Opening and working hours are
 stored as EAT wall-clock times; this module converts them to UTC instants
 against the given date and returns UTC. Africa/Nairobi is UTC+3 with no DST —
@@ -99,6 +105,26 @@ class Interval:
 
 
 @dataclass(frozen=True)
+class Busy:
+    """An occupied span, and whether the database would defend it.
+
+    `is_active` mirrors `statuses.ACTIVE_STATUSES` — the exclusion constraint's
+    condition. It is carried here rather than re-derived because it is the one
+    fact that distinguishes "somebody else has this chair" from "this time was
+    already worked", and slice 4's collision resolver has to tell a staff member
+    which. A completed appointment blocks the *offer* and not the *write*; see
+    `scheduling/statuses.py` for why that divergence exists.
+    """
+
+    starts_at: datetime
+    ends_at: datetime
+    is_active: bool = True
+
+    def overlaps(self, other):
+        return self.starts_at < other.ends_at and other.starts_at < self.ends_at
+
+
+@dataclass(frozen=True)
 class StaffDayFacts:
     """Everything the engine needs about one staff member on one EAT date.
 
@@ -117,7 +143,7 @@ class StaffDayFacts:
     shop_window: Interval | None = None
     #: None when the staff member is off — leave or no working row.
     staff_window: Interval | None = None
-    busy: tuple[Interval, ...] = field(default_factory=tuple)
+    busy: tuple[Busy, ...] = field(default_factory=tuple)
     buffer_minutes: int = 0
     slot_interval_minutes: int = 15
 
@@ -137,25 +163,76 @@ class StaffDayFacts:
 
 @dataclass(frozen=True)
 class Policy:
-    """The caller's answers to (c) and (d).
+    """The caller's answers to (c) and (d), plus who the rules bind.
 
-    Staff booking at the chair pass `Policy.for_staff()`: a walk-in starts now,
-    and refusing it because `now + 30min` is in the future would make the
-    product unusable for the majority of Kenyan salon trade.
+    ## Shop configuration is a rule for the public and advice for staff
+
+    Slice 4's decision, and the reason `enforce_shop_config` exists. A stylist
+    taking a 6:15 pm walk-in when the shop's hours end at 6:00 pm must succeed.
+    So must one recorded at 11:04, which is not on any 15-minute grid, and one
+    started the moment the previous client left, which is inside the turnaround
+    buffer. Every one of those is a staff member describing something that is
+    physically happening in front of them. Software that answers "no" to a fact
+    is software that gets worked around, and a calendar that is worked around
+    stops matching the shop within a week — which is the adoption failure
+    CLAUDE.md §4 is about.
+
+    `enforce_shop_config=False` therefore switches off exactly four things:
+    opening hours, dated closures, the slot grid, and the buffer. It is one
+    decision, so it is one flag; splitting it into four would invite three of
+    them being switched back on by someone reading only their own line.
+
+    What it does **not** switch off is collisions. Two people cannot occupy one
+    chair, the exclusion constraint would refuse the write regardless, and the
+    refusal would arrive as an error with no remedy attached. Checking it here
+    is what lets `scheduling/collisions.py` turn it into a choice instead —
+    "shorten to 12:00" or "give it to Brian" — which is the shape the design
+    asks for and the shape a standing, one-handed staff member can act on.
+
+    A consequence worth stating because tests depend on it: under
+    `Policy.for_staff()`, `SlotUnavailable` can *only* mean a collision. Nothing
+    else is left to refuse.
     """
 
     min_lead_minutes: int = 0
     horizon_days: int | None = None
+    #: Opening hours, closures, the slot grid, the buffer. See above.
+    enforce_shop_config: bool = True
+    #: Backfill. Set only after a staff member has been shown the overlap and
+    #: chosen to record it anyway — see `scheduling/collisions.py`. Never
+    #: reachable from the public API, and it does not weaken the constraint:
+    #: an overlap with a *live* booking is still refused, here and in Postgres.
+    allow_over_completed: bool = False
+
+    def __post_init__(self):
+        # "One decision, one flag" made structural. A lead time or a horizon
+        # alongside `enforce_shop_config=False` would be silently ignored by
+        # `is_bookable_start`, which is exactly the kind of quiet no-op that
+        # takes an afternoon to find.
+        if not self.enforce_shop_config and (self.min_lead_minutes or self.horizon_days):
+            raise ValueError(
+                "enforce_shop_config=False means collisions only; a lead time or "
+                "horizon set alongside it would never be applied."
+            )
 
     @classmethod
     def for_public(cls, shop):
         return cls(min_lead_minutes=shop.min_lead_minutes, horizon_days=shop.booking_horizon_days)
 
     @classmethod
-    def for_staff(cls):
-        """No lead time, no horizon. Staff can record what is happening now and
-        can book a regular six months out if the client asks."""
-        return cls(min_lead_minutes=0, horizon_days=None)
+    def for_staff(cls, *, allow_over_completed=False):
+        """Collisions only.
+
+        No lead time — a walk-in starts now. No horizon — staff can book a
+        regular six months out if the client asks. No shop configuration —
+        see above.
+        """
+        return cls(
+            min_lead_minutes=0,
+            horizon_days=None,
+            enforce_shop_config=False,
+            allow_over_completed=allow_over_completed,
+        )
 
 
 def local_midnight(day):
@@ -194,8 +271,56 @@ def _grid_starts(window, day, interval_minutes):
         candidate += step
 
 
+def blockers(facts, buffer_minutes, *, active_only=False):
+    """Existing appointments, each holding its own trailing buffer — decision (b).
+
+    `active_only` drops completed work, which the database would also let a
+    write straight through. Used by the backfill path only: a staff member
+    recording, at 16:00, the shave they did at 11:15 and never entered.
+    """
+    padding = timedelta(minutes=buffer_minutes)
+    return tuple(
+        Busy(b.starts_at, b.ends_at + padding, b.is_active)
+        for b in facts.busy
+        if b.is_active or not active_only
+    )
+
+
+def _collides(blocked, starts_at, ends_at, buffer_minutes):
+    candidate = Interval(starts_at, ends_at + timedelta(minutes=buffer_minutes))
+    return [busy for busy in blocked if candidate.overlaps(busy)]
+
+
+def is_free(facts, *, starts_at, duration_minutes, buffer_minutes, active_only=False):
+    """Does this span collide with anything already on this staff member's day?
+
+    The one check no policy switches off — see `Policy`. Split out so that the
+    offer list below and the write check further down share a single
+    implementation of what "in the way" means; two would diverge on the first
+    change to the buffer rule.
+
+    `buffer_minutes` is passed rather than read off `facts` because it is a
+    policy question, not a fact: the shop's turnaround applies to what the
+    public is offered, and not to a staff member recording a walk-in that
+    started the moment the last client stood up.
+    """
+    if duration_minutes <= 0:
+        return False
+    ends_at = starts_at + timedelta(minutes=duration_minutes)
+    blocked = blockers(facts, buffer_minutes, active_only=active_only)
+    return not _collides(blocked, starts_at, ends_at, buffer_minutes)
+
+
 def derive_slots(facts, *, duration_minutes, policy, now):
     """The bookable starts for one staff member, one service, one day.
+
+    **The offer list.** Always bounded by the working window and always on the
+    grid, whatever the policy says — an enumeration needs bounds, and a staff
+    member picking a time for next Thursday should be picking from the same
+    tidy list a client sees. `enforce_shop_config` governs what may be *written*
+    (`is_bookable_start`), not what is *offered*, and the two are different
+    questions: the design's walk-in flow never picks from this list at all, it
+    defaults to now.
 
     Pure. Returns a tuple so a caller cannot mutate a cached result, and so two
     derivations can be compared with `==` in the cache-equivalence test.
@@ -219,9 +344,7 @@ def derive_slots(facts, *, duration_minutes, policy, now):
         return ()
 
     duration = timedelta(minutes=duration_minutes)
-    buffer_ = timedelta(minutes=facts.buffer_minutes)
-    # Each existing appointment holds its own trailing buffer — decision (b).
-    blocked = tuple(Interval(b.starts_at, b.ends_at + buffer_) for b in facts.busy)
+    blocked = blockers(facts, facts.buffer_minutes)
 
     slots = []
     for start in _grid_starts(window, facts.day, facts.slot_interval_minutes):
@@ -232,22 +355,52 @@ def derive_slots(facts, *, duration_minutes, policy, now):
         # need not: there is no following client to turn the chair around for.
         if end > window.ends_at:
             break
-        candidate = Interval(start, end + buffer_)
-        if any(candidate.overlaps(busy) for busy in blocked):
+        if _collides(blocked, start, end, facts.buffer_minutes):
             continue
         slots.append(Slot(start, end))
     return tuple(slots)
 
 
 def is_bookable_start(facts, *, starts_at, duration_minutes, policy, now):
-    """Is this exact instant one of the derived slots?
+    """May this exact instant be written?
 
     CLAUDE.md §4: "Never trust a client-supplied slot as valid — always
     re-derive on write." `booking.create_appointment` calls this rather than
     doing its own arithmetic, so the write path and the read path cannot
     disagree about what is bookable.
+
+    Two branches, because slice 4 established that shop configuration binds the
+    public and advises staff — see `Policy`.
+
+    Under the public policy the answer is **membership in the offer list**, not
+    a second implementation of it. A re-derivation here that agreed with
+    `derive_slots` today would diverge from it on the first change to the buffer
+    rule, and the failure would be a client shown a slot the write path then
+    refuses — at the moment they are being asked for money.
+
+    Under `Policy.for_staff()` there is no list to be a member of: 11:04 is not
+    on the grid and 18:15 is outside the window, and both are things that are
+    actually happening. What is left is the collision check — literally nothing
+    else, including no lower bound in time, because recording the shave you did
+    at 11:15 and forgot to enter is the case backfill exists for. That is what
+    makes `SlotUnavailable` mean exactly one thing on the staff path.
+
+    `now` is therefore unused on the relaxed branch, and stays in the signature
+    because the caller does not know which branch it will take.
     """
-    return any(
-        slot.starts_at == starts_at
-        for slot in derive_slots(facts, duration_minutes=duration_minutes, policy=policy, now=now)
+    if duration_minutes <= 0:
+        return False
+    if policy.enforce_shop_config:
+        return any(
+            slot.starts_at == starts_at
+            for slot in derive_slots(
+                facts, duration_minutes=duration_minutes, policy=policy, now=now
+            )
+        )
+    return is_free(
+        facts,
+        starts_at=starts_at,
+        duration_minutes=duration_minutes,
+        buffer_minutes=0,
+        active_only=policy.allow_over_completed,
     )

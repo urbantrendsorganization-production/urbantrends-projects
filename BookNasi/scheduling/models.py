@@ -8,6 +8,8 @@ and snapshots so the row still means something after the service it points at
 has changed.
 """
 
+from datetime import timedelta
+
 from django.contrib.postgres.constraints import ExclusionConstraint
 from django.contrib.postgres.fields import DateTimeRangeField, RangeOperators
 from django.core.exceptions import ValidationError
@@ -22,6 +24,12 @@ from scheduling.statuses import ACTIVE_STATUSES, AppointmentStatus, BookingSourc
 #: Referenced by the migration and by `scheduling/booking.py`, which turns a
 #: violation of *this* constraint — and no other — into SlotTaken.
 NO_OVERLAP_CONSTRAINT = "no_overlapping_appointments"
+
+#: The offline-retry guard. Matched by name in `booking.py` for the same reason
+#: the one above is: a bare IntegrityError tells the caller nothing about which
+#: rule it broke, and the two mean opposite things — one is "somebody else has
+#: this chair", the other is "you already sent this".
+REQUEST_ID_CONSTRAINT = "one_appointment_per_client_request"
 
 #: `[start, end)`. An appointment ending at 10:00 and one starting at 10:00 do
 #: not overlap, which is the whole reason back-to-back bookings work. Postgres
@@ -91,7 +99,32 @@ class Appointment(OrgDerivedModel):
     #: Whole shillings, as everywhere. See shops/money.py.
     price_snapshot = models.PositiveIntegerField()
     deposit_snapshot = models.PositiveIntegerField()
+    #: The duration **as booked**. After a `completed` transition `time_range`
+    #: holds what actually happened, so this is also how the booked end is
+    #: recovered when a staff member undoes a mis-tapped "Finish now".
     duration_snapshot = models.PositiveSmallIntegerField(validators=[MinValueValidator(1)])
+
+    #: When the chair was actually taken and given up. Distinct from
+    #: `time_range`, which is what was booked until the appointment completes.
+    #: Null on a row that has not started; the design's "waiting, not started"
+    #: walk-in is exactly `confirmed` with no `started_at` — see transitions.py.
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    #: Supplied by the staff app, not by the server. Slice 4 renders a walk-in
+    #: optimistically and retries the write on a shop phone with a bad
+    #: connection; without this a retry that the server had already accepted
+    #: would insert a second row, collide with the first, and surface to the
+    #: staff member as "that slot was just taken" — by themselves. Scoped to the
+    #: shop rather than globally so two shops cannot collide on a generated id.
+    #:
+    #: `null=True` on a CharField, against the usual Django advice, because the
+    #: unique constraint below is partial and needs NULL to mean *absent*. With
+    #: `""` as the empty value every online booking in the shop would share one
+    #: key and the second would be refused.
+    client_request_id = models.CharField(  # noqa: DJ001 — see above
+        max_length=64, null=True, blank=True, editable=False
+    )
 
     class Meta:
         db_table = "appointments"
@@ -130,6 +163,14 @@ class Appointment(OrgDerivedModel):
             models.CheckConstraint(
                 condition=Q(time_range__isempty=False), name="appointment_range_not_empty"
             ),
+            # The offline retry guard. Partial, because the overwhelming
+            # majority of rows have no id: online bookings, and anything an
+            # older client wrote.
+            models.UniqueConstraint(
+                fields=["shop", "client_request_id"],
+                condition=Q(client_request_id__isnull=False),
+                name="one_appointment_per_client_request",
+            ),
         ]
 
     def save(self, *args, **kwargs):
@@ -166,6 +207,28 @@ class Appointment(OrgDerivedModel):
         """Does this row currently occupy its slot as far as the constraint is
         concerned? Reads the shared tuple, never a literal list."""
         return self.status in ACTIVE_STATUSES
+
+    @property
+    def booked_ends_at(self):
+        """Where the appointment was *scheduled* to end.
+
+        Equal to `ends_at` until a `completed` transition trims the range to
+        what actually happened. Recovered from `duration_snapshot` rather than
+        stored a second time, which is the reason that snapshot is taken.
+        """
+        return self.starts_at + timedelta(minutes=self.duration_snapshot)
+
+    @property
+    def is_waiting(self):
+        """The design's "waiting, not started" walk-in state.
+
+        Derived, not a seventh status: the row is confirmed, its start time has
+        passed, and nobody has hit Start. Adding a status would have meant
+        touching the tuple the exclusion constraint filters on — a migration
+        against the constraint that protects the product's core guarantee, to
+        express something the two existing columns already say.
+        """
+        return self.status == AppointmentStatus.CONFIRMED and self.started_at is None
 
     def clean(self):
         if self.staff_id and self.shop_id and self.staff.shop_id != self.shop_id:

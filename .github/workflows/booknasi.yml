@@ -97,6 +97,8 @@ jobs:
             scheduling/tests/test_concurrency.py \
             scheduling/tests/test_cross_process_race.py \
             scheduling/tests/test_cache.py \
+            scheduling/tests/test_transitions.py \
+            scheduling/tests/test_walk_in.py \
             -v
 
       - name: Run tests
@@ -133,5 +135,10 @@ jobs:
           cache-dependency-path: BookNasi/web/package-lock.json
       - name: Install dependencies
         run: npm ci
+      # CLAUDE.md §10. The tokens job proves the four invariants ship as
+      # constants rather than custom properties; this proves the staff screens
+      # actually use them, which is the half a token file cannot see.
+      - name: Design invariants (52px targets, 64px walk-in rows)
+        run: npm run invariants
       - name: Build
         run: npm run build

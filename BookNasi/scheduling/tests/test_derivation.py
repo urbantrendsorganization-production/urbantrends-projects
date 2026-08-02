@@ -14,11 +14,13 @@ import pytest
 
 from scheduling.availability import (
     LOCAL_TZ,
+    Busy,
     Interval,
     Policy,
     StaffDayFacts,
     derive_slots,
     is_bookable_start,
+    is_free,
     local_date,
     local_midnight,
 )
@@ -38,17 +40,26 @@ def facts(
     works_from=9,
     works_to=18,
     busy=(),
+    completed=(),
     buffer_minutes=0,
     interval=15,
     shop_open=True,
     working=True,
 ):
+    """`busy` is live work; `completed` is finished work.
+
+    The two are separated at the fixture because the engine treats them
+    identically for *offers* and the database does not treat them identically
+    for *writes* — see scheduling/statuses.py. A fixture that could not express
+    the difference could not test it.
+    """
     return StaffDayFacts(
         staff_id="s1",
         day=DAY,
         shop_window=Interval(eat(opens), eat(closes)) if shop_open else None,
         staff_window=Interval(eat(works_from), eat(works_to)) if working else None,
-        busy=tuple(Interval(eat(*s), eat(*e)) for s, e in busy),
+        busy=tuple(Busy(eat(*s), eat(*e), True) for s, e in busy)
+        + tuple(Busy(eat(*s), eat(*e), False) for s, e in completed),
         buffer_minutes=buffer_minutes,
         slot_interval_minutes=interval,
     )
@@ -434,3 +445,118 @@ class TestReDerivationOnWrite:
     def test_a_nonsense_duration_yields_nothing_rather_than_a_full_day(self, duration):
         """A zero duration would otherwise make every grid point 'fit'."""
         assert derive_slots(facts(), duration_minutes=duration, policy=NO_POLICY, now=EARLY) == ()
+
+
+class TestTheOfferListAndTheWriteCheckAgree:
+    """The one property that keeps two functions from becoming two engines.
+
+    Under the public policy `is_bookable_start` is implemented as membership in
+    `derive_slots`, so agreement is structural rather than tested. This asserts
+    it anyway, over every minute of a working day, because the day somebody
+    "optimises" that membership test into a re-derivation is the day a client is
+    shown a slot the write path refuses — at the moment they are being asked for
+    money.
+    """
+
+    def test_across_a_whole_day_at_one_minute_resolution(self):
+        day = facts(busy=[((11,), (12,))], buffer_minutes=10)
+        policy = Policy(min_lead_minutes=30, horizon_days=60)
+        now = eat(8)
+        offered = {
+            slot.starts_at
+            for slot in derive_slots(day, duration_minutes=60, policy=policy, now=now)
+        }
+
+        moment = eat(8)
+        checked = 0
+        while moment < eat(19):
+            bookable = is_bookable_start(
+                day, starts_at=moment, duration_minutes=60, policy=policy, now=now
+            )
+            assert bookable == (moment in offered), moment
+            checked += 1
+            moment += timedelta(minutes=1)
+
+        assert checked > 600  # not vacuous
+
+
+class TestStaffPolicyRelaxesConfigAndNothingElse:
+    """Slice 4, decision (f). Each of these is a thing physically happening in
+    front of a staff member; the last is two people in one chair."""
+
+    STAFF = Policy.for_staff()
+
+    def _check(self, day, moment, minutes=60):
+        return is_bookable_start(
+            day, starts_at=moment, duration_minutes=minutes, policy=self.STAFF, now=eat(5)
+        )
+
+    def test_off_grid_is_allowed(self):
+        assert self._check(facts(), eat(11, 4))
+
+    def test_after_closing_is_allowed(self):
+        """The 6:15 pm walk-in when hours end at 6:00 pm."""
+        assert self._check(facts(), eat(18, 15), minutes=20)
+
+    def test_a_shut_shop_is_allowed(self):
+        assert self._check(facts(shop_open=False), eat(11))
+
+    def test_a_leave_day_is_allowed(self):
+        assert self._check(facts(working=False), eat(11))
+
+    def test_the_buffer_does_not_block(self):
+        """Back-to-back walk-ins are the common case on a Saturday."""
+        assert self._check(facts(busy=[((10,), (11,))], buffer_minutes=30), eat(11))
+
+    def test_a_live_booking_still_blocks(self):
+        assert not self._check(facts(busy=[((10,), (11,))]), eat(10, 30))
+
+    def test_completed_work_blocks_by_default(self):
+        """Blocks the *offer*. The database would take the write, which is why
+        the resolver can offer it as a deliberate backfill."""
+        assert not self._check(facts(completed=[((10,), (11,))]), eat(10, 30))
+
+    def test_completed_work_yields_to_an_explicit_backfill(self):
+        allowed = Policy.for_staff(allow_over_completed=True)
+
+        assert is_bookable_start(
+            facts(completed=[((10,), (11,))]),
+            starts_at=eat(10, 30),
+            duration_minutes=20,
+            policy=allowed,
+            now=eat(16),
+        )
+
+    def test_a_backfill_still_cannot_overwrite_a_live_booking(self):
+        """The flag relaxes what is offered, never the constraint."""
+        allowed = Policy.for_staff(allow_over_completed=True)
+
+        assert not is_bookable_start(
+            facts(busy=[((10,), (11,))]),
+            starts_at=eat(10, 30),
+            duration_minutes=20,
+            policy=allowed,
+            now=eat(16),
+        )
+
+
+class TestIsFree:
+    def test_the_buffer_is_a_parameter_not_a_fact(self):
+        """The shop's turnaround applies to what the public is offered and not
+        to a staff member recording a walk-in that started the moment the last
+        client stood up. Same facts, two answers, one function."""
+        day = facts(busy=[((10,), (11,))], buffer_minutes=30)
+
+        assert not is_free(day, starts_at=eat(11), duration_minutes=20, buffer_minutes=30)
+        assert is_free(day, starts_at=eat(11), duration_minutes=20, buffer_minutes=0)
+
+    def test_a_zero_duration_is_never_free(self):
+        assert not is_free(facts(), starts_at=eat(11), duration_minutes=0, buffer_minutes=0)
+
+
+def test_a_policy_cannot_half_relax():
+    """`enforce_shop_config=False` means collisions only. A lead time set
+    alongside it would never be applied, and a silent no-op in the engine is the
+    kind of thing that takes an afternoon to find."""
+    with pytest.raises(ValueError):
+        Policy(min_lead_minutes=30, enforce_shop_config=False)

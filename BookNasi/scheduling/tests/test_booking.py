@@ -116,40 +116,40 @@ class TestSnapshots:
         assert appointment.ends_at == eat(wednesday, 13)
 
 
-class TestTheSlotIsReDerived:
+def book_online(shop_setup, when, **kwargs):
+    """Same call, public policy. `Policy.for_public` is chosen by the source."""
+    return book(shop_setup, when, source=BookingSource.ONLINE, **kwargs)
+
+
+class TestTheSlotIsReDerivedForTheClient:
+    """CLAUDE.md §4: never trust a client-supplied slot. Every request here is a
+    hand-crafted body, not something the API ever offered."""
+
     def test_an_off_grid_start_is_refused(self, shop_setup, wednesday):
-        """CLAUDE.md §4: never trust a client-supplied slot. This is a
-        hand-crafted request body, not something the API ever offered."""
         with pytest.raises(SlotUnavailable):
-            book(shop_setup, eat(wednesday, 10, 7))
+            book_online(shop_setup, eat(wednesday, 10, 7))
 
     def test_a_start_outside_working_hours_is_refused(self, shop_setup, wednesday):
         with pytest.raises(SlotUnavailable):
-            book(shop_setup, eat(wednesday, 7))
+            book_online(shop_setup, eat(wednesday, 7))
 
     def test_a_start_that_would_run_past_closing_is_refused(self, shop_setup, wednesday):
         """A four-hour braid at 16:00 ends at 20:00; the stylist finishes at
         18:00."""
         with pytest.raises(SlotUnavailable):
-            book(shop_setup, eat(wednesday, 16))
+            book_online(shop_setup, eat(wednesday, 16))
 
     def test_a_closed_day_is_refused(self, shop_setup, wednesday):
         ShopClosure.objects.create(shop=shop_setup.shop, starts_on=wednesday, ends_on=wednesday)
 
         with pytest.raises(SlotUnavailable):
-            book(shop_setup, eat(wednesday, 10))
+            book_online(shop_setup, eat(wednesday, 10))
 
     def test_a_day_the_staff_member_is_on_leave_is_refused(self, shop_setup, wednesday):
         Leave.objects.create(staff=shop_setup.wanjiku, starts_on=wednesday, ends_on=wednesday)
 
         with pytest.raises(SlotUnavailable):
-            book(shop_setup, eat(wednesday, 10))
-
-    def test_an_already_booked_slot_is_refused(self, shop_setup, wednesday):
-        book(shop_setup, eat(wednesday, 10))
-
-        with pytest.raises(SlotUnavailable):
-            book(shop_setup, eat(wednesday, 10))
+            book_online(shop_setup, eat(wednesday, 10))
 
     def test_a_buffer_adjacent_slot_is_refused(self, shop_setup, wednesday):
         """The fixture buffer is ten minutes and the grid is fifteen, so the
@@ -158,9 +158,76 @@ class TestTheSlotIsReDerived:
         book(shop_setup, eat(wednesday, 9))
 
         with pytest.raises(SlotUnavailable):
-            book(shop_setup, eat(wednesday, 13))
+            book_online(shop_setup, eat(wednesday, 13))
 
-        assert book(shop_setup, eat(wednesday, 13, 15))
+        assert book_online(shop_setup, eat(wednesday, 13, 15))
+
+
+class TestShopConfigIsAdvisoryForStaff:
+    """Slice 4's decision (f), from the other side of the same fixture.
+
+    Every request in the class above is refused for a client and permitted for a
+    staff member, and that is the whole of the difference between the two
+    policies. Each one is a thing that is physically happening in front of
+    somebody: a client who turned up at seven, a stylist working through the
+    lunchtime closure, a shave squeezed in at 11:07.
+    """
+
+    def test_an_off_grid_start_is_recorded(self, shop_setup, wednesday):
+        appointment = book(shop_setup, eat(wednesday, 10, 7), service=shop_setup.shave)
+
+        assert appointment.starts_at == eat(wednesday, 10, 7)
+
+    def test_a_start_before_opening_is_recorded(self, shop_setup, wednesday):
+        assert book(shop_setup, eat(wednesday, 7), service=shop_setup.shave)
+
+    def test_a_service_running_past_closing_is_recorded(self, shop_setup, wednesday):
+        """The 6:15 walk-in when hours end at 6:00. It must succeed."""
+        appointment = book(shop_setup, eat(wednesday, 17, 55), service=shop_setup.shave)
+
+        assert appointment.ends_at == eat(wednesday, 18, 15)
+
+    def test_a_closed_day_is_recorded(self, shop_setup, wednesday):
+        ShopClosure.objects.create(shop=shop_setup.shop, starts_on=wednesday, ends_on=wednesday)
+
+        assert book(shop_setup, eat(wednesday, 10), service=shop_setup.shave)
+
+    def test_a_leave_day_is_recorded(self, shop_setup, wednesday):
+        """A stylist who came in anyway. The leave row is not deleted and the
+        client's booking page still shows them away; this only records that
+        somebody sat in the chair."""
+        Leave.objects.create(staff=shop_setup.wanjiku, starts_on=wednesday, ends_on=wednesday)
+
+        assert book(shop_setup, eat(wednesday, 10), service=shop_setup.shave)
+
+    def test_the_buffer_does_not_block_a_walk_in(self, shop_setup, wednesday):
+        """Back-to-back walk-ins are the common case on a Saturday. Making the
+        second one wait ten minutes for a turnaround that has already happened
+        would add a tap to the flow that must stay at three."""
+        book(shop_setup, eat(wednesday, 9))
+
+        assert book(shop_setup, eat(wednesday, 13), service=shop_setup.shave)
+
+    def test_a_collision_is_still_refused(self, shop_setup, wednesday):
+        """The one thing that is never advisory. Two people, one chair."""
+        book(shop_setup, eat(wednesday, 10))
+
+        with pytest.raises(SlotUnavailable):
+            book(shop_setup, eat(wednesday, 10))
+
+    def test_unavailable_can_only_mean_a_collision(self, shop_setup, wednesday):
+        """The property the walk-in endpoint depends on: with hours, closures,
+        the grid, the lead time and the buffer all switched off, nothing else is
+        left to refuse. So a `SlotUnavailable` on the staff path is always
+        resolvable into a choice, and the endpoint never has to guess."""
+        ShopClosure.objects.create(shop=shop_setup.shop, starts_on=wednesday, ends_on=wednesday)
+        Leave.objects.create(staff=shop_setup.wanjiku, starts_on=wednesday, ends_on=wednesday)
+
+        # Shut, on leave, off-grid, outside hours — and still fine.
+        assert book(shop_setup, eat(wednesday, 6, 3), service=shop_setup.shave)
+        # Only the second one, on top of the first, fails.
+        with pytest.raises(SlotUnavailable):
+            book(shop_setup, eat(wednesday, 6, 3), service=shop_setup.shave)
 
     def test_a_staff_member_who_does_not_offer_the_service_raises(self, shop_setup, wednesday):
         """Loudly, and as a different exception. This is a programming error on

@@ -38,14 +38,44 @@ ACTIVE_STATUSES = (
 #: What the *engine* treats as busy. Derived from ACTIVE_STATUSES rather than
 #: written out again.
 #:
-#: Wider than the constraint by exactly one status, and the asymmetry is
-#: deliberate. The constraint exists to arbitrate concurrent writes on live
-#: bookings; a completed appointment is not live and cannot be raced. But that
-#: time *was worked* — offering it again would let a staff member record a
-#: retroactive walk-in on top of a job that already happened, and would make
-#: today's staff view show a free slot at 11:00 for a cut that finished at
-#: 11:30. So the engine refuses to offer it, and `create_appointment` re-derives
-#: before every insert, which is what closes the gap the constraint leaves open.
+#: ## Why this is wider than the constraint, and must stay wider
+#:
+#: `COMPLETED` is in here and deliberately **not** in the exclusion constraint.
+#: An unexplained divergence between what the database enforces and what the
+#: engine enforces is the kind of thing a later reader "tidies up", so the reason
+#: is written here rather than left to be inferred.
+#:
+#: The two sets answer two different questions:
+#:
+#: - The constraint answers *may this row exist?* It is a concurrency device. It
+#:   arbitrates two people confirming the same slot in the same instant, which
+#:   can only happen between live bookings.
+#: - `BLOCKING_STATUSES` answers *should we offer this time?* It is an offer
+#:   policy. Time that was worked is not on offer: a cut that ran 10:00–11:30
+#:   must not leave the staff view showing a free 11:00.
+#:
+#: The case that needs the divergence is **walk-in backfill**. A stylist finishes
+#: at 11:30, and at 16:00 remembers the shave they did at 11:15 and never
+#: recorded. That walk-in overlaps a completed appointment. The engine will not
+#: *offer* 11:15 — correctly, because nobody should be booked into worked time by
+#: accident — but the write itself has to be possible, because it is a correction
+#: to history, and history is the thing the owner dashboard reads. With
+#: `COMPLETED` inside the constraint the database would refuse it outright, and a
+#: staff member with no way to record what actually happened stops recording
+#: anything, which is the adoption failure CLAUDE.md §4 is about.
+#:
+#: So the split is load-bearing in both directions, and `scheduling/collisions.py`
+#: depends on it: an overlap with an *active* appointment can only be resolved by
+#: shortening or moving, because the database will refuse it either way, while an
+#: overlap with a *completed* one can additionally be recorded as-is.
+#:
+#: Tidying this in either direction breaks something concrete:
+#:
+#: - Adding `COMPLETED` to the constraint makes backfill impossible and turns a
+#:   correction into an `IntegrityError` with no remedy path.
+#: - Removing `COMPLETED` from here makes the engine offer worked time, and the
+#:   first booking taken against it collides with nothing in the database and
+#:   with a real person in the chair.
 BLOCKING_STATUSES = (*ACTIVE_STATUSES, AppointmentStatus.COMPLETED)
 
 

@@ -8,15 +8,15 @@ The layering is:
                     \\-> availability.py (pure, called with the facts)
 
 `gather_shop_day` fetches a whole shop-day for every staff member in a fixed
-number of queries — six, asserted by a test. The staff day view in slice 4 shows
-eight stylists side by side; doing this per-staff would be forty-eight queries
-before anyone had scrolled.
+number of queries — five, asserted by a test. The staff day view shows eight
+stylists side by side; doing this per-staff would be forty queries before anyone
+had scrolled.
 """
 
 from collections import defaultdict
 from datetime import timedelta
 
-from scheduling.availability import Interval, StaffDayFacts, local_midnight, to_utc
+from scheduling.availability import Busy, Interval, StaffDayFacts, local_midnight, to_utc
 from scheduling.statuses import BLOCKING_STATUSES
 from shops.models import Leave, OpeningHours, ShopClosure, Staff, WorkingHours
 
@@ -85,7 +85,12 @@ def gather_shop_day(shop, day, *, staff=None):
         .order_by("time_range")
     )
     for appointment in appointments:
-        busy[appointment.staff_id].append(Interval(appointment.starts_at, appointment.ends_at))
+        # `is_active` mirrors the exclusion constraint's condition and travels
+        # with the interval, so the collision resolver can tell a chair that is
+        # taken from time that was already worked. See scheduling/statuses.py.
+        busy[appointment.staff_id].append(
+            Busy(appointment.starts_at, appointment.ends_at, appointment.is_active)
+        )
 
     return {
         row.id: StaffDayFacts(

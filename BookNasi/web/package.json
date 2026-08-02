@@ -2,14 +2,17 @@
   "name": "booknasi-web",
   "version": "0.1.0",
   "private": true,
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "dev": "npm run tokens && next dev",
     "build": "npm run tokens && next build",
     "start": "next start",
     "tokens": "npm --workspace @booknasi/tokens run build",
     "tokens:check": "npm --workspace @booknasi/tokens run check",
-    "lint": "next lint"
+    "lint": "next lint",
+    "invariants": "node scripts/check-invariants.mjs"
   },
   "dependencies": {
     "next": "^15.0.0",

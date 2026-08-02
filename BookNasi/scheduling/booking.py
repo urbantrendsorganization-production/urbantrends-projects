@@ -75,7 +75,7 @@ from django.utils import timezone
 
 from scheduling.availability import Policy, is_bookable_start, local_date
 from scheduling.cache import facts_for_staff_day
-from scheduling.models import NO_OVERLAP_CONSTRAINT, Appointment
+from scheduling.models import NO_OVERLAP_CONSTRAINT, REQUEST_ID_CONSTRAINT, Appointment
 from scheduling.statuses import AppointmentStatus, BookingSource
 from shops.durations import resolve_duration
 
@@ -181,7 +181,7 @@ def _advisory_key(staff_id):
     return uuid.UUID(str(staff_id)).int & ((1 << 62) - 1)
 
 
-def _order_bookings_for(staff_id):
+def order_bookings_for(staff_id):
     """Serialise concurrent inserts for one staff member.
 
     Transaction-scoped: released on commit or rollback, with no unlock call to
@@ -203,6 +203,24 @@ def default_status_for(source):
     return AppointmentStatus.CONFIRMED
 
 
+def existing_for_request(shop, client_request_id):
+    """The row a previous attempt at this same request already wrote, if any.
+
+    Slice 4's staff app renders a walk-in optimistically and retries the write
+    when the shop's connection drops mid-request — at which point the server may
+    well have committed the row that the phone never heard about. Without this,
+    the retry inserts a second appointment, the exclusion constraint refuses it,
+    and the staff member is told their own walk-in just took their slot.
+    """
+    if not client_request_id:
+        return None
+    return (
+        Appointment.objects.for_org(shop.organization_id)
+        .filter(shop=shop, client_request_id=client_request_id)
+        .first()
+    )
+
+
 def create_appointment(
     *,
     staff,
@@ -213,6 +231,8 @@ def create_appointment(
     status=None,
     now=None,
     policy=None,
+    duration_minutes=None,
+    client_request_id=None,
 ):
     """Book `service` with `staff` at `starts_at`, or raise.
 
@@ -220,9 +240,20 @@ def create_appointment(
     CLAUDE.md §4. The caller may have computed it from a cached slot list that
     was already stale when it rendered.
 
+    `duration_minutes` overrides the resolved duration and exists for exactly
+    one caller: a staff member who has been shown an overlap and chosen
+    "shorten to 12:00". It never shortens silently — the value comes back from
+    an `Option` the engine itself produced. `duration_snapshot` records the
+    shortened length, because that is what was sold.
+
     Returns the created `Appointment`.
     """
     now = now or timezone.now()
+
+    already = existing_for_request(staff.shop, client_request_id)
+    if already is not None:
+        return already
+
     if policy is None:
         policy = (
             Policy.for_public(staff.shop) if source == BookingSource.ONLINE else Policy.for_staff()
@@ -233,7 +264,7 @@ def create_appointment(
     link = next((row for row in service.staff_links.all() if row.staff_id == staff.id), None)
     # Raises ServiceNotOffered when this person does not do this job. Not caught
     # here: it is a programming error on the write path, not a busy calendar.
-    duration = resolve_duration(service=service, staff_service=link)
+    duration = duration_minutes or resolve_duration(service=service, staff_service=link)
 
     day = local_date(starts_at)
     facts = facts_for_staff_day(staff, day)
@@ -243,27 +274,48 @@ def create_appointment(
         raise SlotUnavailable(starts_at=starts_at, staff=staff)
 
     ends_at = starts_at + timedelta(minutes=duration)
+    resolved_status = status or default_status_for(source)
     appointment = Appointment(
         shop=staff.shop,
         staff=staff,
         service=service,
         client=client,
         time_range=(starts_at, ends_at),
-        status=status or default_status_for(source),
+        status=resolved_status,
         source=source,
         # Snapshots, taken here and never refreshed. See Appointment's docstring.
         price_snapshot=service.price,
-        deposit_snapshot=service.deposit_amount,
+        # CLAUDE.md §12 and the design's walk-in screen: "Deposit — Not for
+        # walk-ins". Nothing was pushed and nothing is owed up front, so the
+        # snapshot records zero rather than an amount nobody was asked for.
+        deposit_snapshot=0 if source == BookingSource.WALK_IN else service.deposit_amount,
         duration_snapshot=duration,
+        client_request_id=client_request_id or None,
+        started_at=now if resolved_status == AppointmentStatus.IN_PROGRESS else None,
     )
 
-    with slot_taken_on_conflict(starts_at=starts_at, staff=staff):
-        # `atomic` so the constraint violation rolls back cleanly and the
-        # connection is usable afterwards — without it the failed statement
-        # poisons the surrounding transaction and the caller's next query dies
-        # with a confusing TransactionManagementError instead.
-        with transaction.atomic():
-            _order_bookings_for(staff.id)
-            appointment.save()
+    try:
+        with slot_taken_on_conflict(starts_at=starts_at, staff=staff):
+            # `atomic` so the constraint violation rolls back cleanly and the
+            # connection is usable afterwards — without it the failed statement
+            # poisons the surrounding transaction and the caller's next query
+            # dies with a confusing TransactionManagementError instead.
+            with transaction.atomic():
+                order_bookings_for(staff.id)
+                appointment.save()
+    except IntegrityError as exc:
+        # Two retries of one offline write, racing each other. The check above
+        # catches the ordinary case where the first attempt has already
+        # committed; this catches the narrow one where both are in flight. The
+        # unique constraint decides, and the loser returns the row the winner
+        # wrote — which is the row the phone was asking for.
+        settled = (
+            existing_for_request(staff.shop, client_request_id)
+            if REQUEST_ID_CONSTRAINT in str(exc)
+            else None
+        )
+        if settled is None:
+            raise
+        return settled
 
     return appointment

@@ -43,12 +43,38 @@ class MeView(APIView):
             .filter(user=request.user, is_active=True)
             .select_related("organization")
         )
+        memberships = list(memberships)
         return Response(
             {
                 "user": UserSerializer(request.user).data,
                 "memberships": MembershipSerializer(memberships, many=True).data,
+                # Which chairs this person actually works at. Added in slice 4
+                # so the staff app can boot into Today from one request rather
+                # than three — it opens on a shop phone on 3G with a client
+                # already waiting, and every round trip is visible.
+                "chairs": _chairs_for(memberships),
             }
         )
+
+
+def _chairs_for(memberships):
+    from shops.models import Staff
+
+    rows = (
+        Staff.objects.unscoped()
+        .filter(membership__in=memberships, is_active=True)
+        .select_related("shop")
+    )
+    return [
+        {
+            "staff_id": str(row.id),
+            "display_name": row.display_name,
+            "shop_id": str(row.shop_id),
+            "shop_name": row.shop.name,
+            "organization_id": str(row.organization_id),
+        }
+        for row in rows
+    ]
 
 
 class InviteAcceptView(APIView):
