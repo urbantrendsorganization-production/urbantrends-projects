@@ -1,0 +1,18 @@
+{
+  "name": "@booknasi/tokens",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Design tokens extracted from the BookNasi design handoff. Consumed by both the standalone app and the embeddable widget.",
+  "type": "module",
+  "main": "./dist/tokens.js",
+  "types": "./dist/tokens.ts",
+  "exports": {
+    ".": { "types": "./dist/tokens.ts", "default": "./dist/tokens.js" },
+    "./css": "./dist/tokens.css",
+    "./tailwind": "./dist/tailwind.js"
+  },
+  "scripts": {
+    "build": "node src/build.mjs",
+    "check": "node src/build.mjs && node src/check.mjs"
+  }
+}

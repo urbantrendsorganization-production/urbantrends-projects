@@ -1,0 +1,28 @@
+{
+  "$comment": [
+    "The test build. `node --test` runs JavaScript, so the TypeScript is compiled",
+    "first — there is no test-runner dependency here, no transform pipeline and no",
+    "jsdom. Node 22 ships the runner; React ships a server renderer.",
+    "",
+    "Emitting CommonJS on purpose: it makes `require` resolve workspace packages",
+    "through node_modules, which is how the compiled tests reach @booknasi/tokens",
+    "without a path-mapping shim at runtime."
+  ],
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": ".testbuild",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "jsx": "react-jsx",
+    "target": "ES2022",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": false,
+    "isolatedModules": false,
+    "incremental": false,
+    "paths": {}
+  },
+  "include": ["packages/booking-core/src/**/*.ts", "tests/**/*.tsx", "components/**/*.tsx"],
+  "exclude": ["node_modules", ".next", ".testbuild"]
+}

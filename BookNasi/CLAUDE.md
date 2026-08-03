@@ -1,0 +1,223 @@
+# CLAUDE.md
+
+Guidance for Claude Code when working in this folder.
+
+---
+
+## 1. What this project is
+
+BookNasi is appointment booking for Kenyan salons and barbershops. Django/DRF backend, Next.js frontend, Postgres + Redis + Celery, M-Pesa deposits.
+
+It has to serve two front doors from one codebase:
+
+1. **Standalone SaaS** — owner signs up, gets a hosted booking page at `shopname.booknasi.co.ke`.
+2. **Embedded module** — a `/site` (TechMtaani) template embeds the booking widget; the client never sees BookNasi branding.
+
+**Build every API as if a third party will integrate it, because one will.** The core knows nothing about templates, themes, or the `/site` shell. No `/site`-specific branches in domain code.
+
+The product being sold is not the calendar. It's the **M-Pesa deposit** that turns a no-show from a total loss into partial payment. Prioritise accordingly.
+
+---
+
+## 2. Stack and commands
+
+| Layer | Choice |
+|---|---|
+| Backend | Django + DRF, Python managed with `uv` |
+| DB | PostgreSQL (needs `btree_gist`) |
+| Cache / broker | Redis |
+| Async | Celery + Celery Beat |
+| Frontend | Next.js + TypeScript, mobile-first |
+| Local | docker-compose |
+| Deploy | GitHub Actions → GHCR → Hetzner, Caddy in front, containers bound to `127.0.0.1` |
+
+```bash
+uv sync                              # install backend deps
+docker compose up -d                 # postgres, redis, api, worker, beat
+uv run python manage.py migrate
+uv run python manage.py test         # or pytest, per repo config
+uv run ruff check . && uv run ruff format .
+npm run dev                          # frontend
+```
+
+---
+
+## 3. Data model — non-negotiable shape
+
+```
+Organization        billing, owner, subscription state
+└ Shop              location, hours, branding, booking page
+  ├ Staff           working hours, skills, leave
+  ├ Service         name, duration, price, deposit rule
+  └ Appointment     client, staff, service, time range, status, payment
+Client              belongs to Organization, NOT Shop
+```
+
+Two rules that are expensive to reverse:
+
+- **Client belongs to the Org.** A regular who visits two branches must be one person with one history. Never scope `Client` to a `Shop`.
+- **Service duration is per-service, overridable per staff member.** A senior stylist does in 30 min what a junior takes 50 for. If the schedule can't express that, the calendar lies and staff stop trusting it.
+
+Every tenant-scoped query filters by org. There is no such thing as a cross-org read outside of admin tooling.
+
+---
+
+## 4. The availability engine — where this build will go wrong
+
+Everything else here is CRUD. Scheduling is not. Treat this module as the highest-risk code in the repo and test it hardest.
+
+Availability is **derived, never stored**:
+
+```
+shop opening hours
+  − staff working hours
+  − staff leave
+  − existing appointments
+  − buffer between services
+  − service duration (staff-specific)
+```
+
+Rules:
+
+- Compute server-side. **Never trust a client-supplied slot as valid** — always re-derive on write.
+- Cache per `(staff_id, date)` in Redis. Invalidate on any write that touches that staff-day: appointment create/cancel/reschedule, leave, working-hour change, service duration change.
+- Store UTC, render EAT. Single timezone, no DST — do not build a timezone abstraction layer.
+
+### Double-booking is prevented at the database, not in Python
+
+Two clients tapping "confirm" in the same second both pass an application-level `if slot_is_free` check. Enable `btree_gist` and add an exclusion constraint on `appointments`:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
+ALTER TABLE appointments ADD CONSTRAINT no_overlapping_appointments
+EXCLUDE USING gist (
+    staff_id WITH =,
+    time_range WITH &&
+) WHERE (status IN ('pending_payment', 'confirmed', 'in_progress'));
+```
+
+Catch the `IntegrityError` and return a clean "just taken, pick another slot." Do not replace this with a lock, a queue, or a `select_for_update` and call it done — the constraint stays regardless of what else you add.
+
+### Walk-ins are v1, not v2
+
+In Kenya walk-ins are the majority. If staff can't record one in **three taps**, they won't, the calendar drifts from reality, and online bookings start colliding with people already in the chair. Any change that adds friction to walk-in entry is a regression.
+
+---
+
+## 5. Payments — M-Pesa deposits
+
+- STK push fires at booking confirmation for the deposit portion. Slot is held as `pending_payment` with a short TTL, released by a Celery job if the callback never arrives.
+- **Callbacks must be idempotent.** Safaricom retries. Unique constraint on the checkout request ID; process exactly once. Duplicate processing means double-charging or double-booking.
+- Deposit rules live on the service: flat amount, percentage, or none (a quick shave shouldn't need one). The shop sets the rule; service creation pre-fills **25%**, so charging nothing is a deliberate change rather than the path of least resistance.
+- **A service with no deposit is not publicly bookable in v1.** Staff can book it and it can be recorded as a walk-in, but the public booking page and the public API must both reject it. There is no client account and no OTP — the STK push *is* the phone verification, so a deposit-free public booking is an unverified number holding a slot for free. Enforce this at the API, not only in the UI.
+- The deposit is applied to the final bill, not held separately.
+- Refund/forfeit is a product decision, not a technical one, but the policy must be visible to the client **before** they pay. Otherwise every forfeit becomes a support ticket.
+- Design payment records so a transaction-fee model stays possible later. Don't implement it now.
+
+Never log full M-Pesa payloads with phone numbers at INFO. Never commit shortcode credentials — sandbox or live.
+
+---
+
+## 6. Notifications
+
+- Confirmation on booking, reminder at T-24h and T-2h, cancellation notice.
+- Reminders are Celery tasks keyed to the appointment. **Cancel the task when the appointment is cancelled** — clients getting reminded about appointments that no longer exist is a trust bug, not a cosmetic one.
+- Messaging cost is a real line item (300 bookings × 3 messages = 900/month on the cheapest tier). Keep the provider behind an interface so SMS → WhatsApp Business API is a swap, not a rewrite.
+
+---
+
+## 7. Two audiences, one product
+
+- **Staff view** must be faster than the notebook for the two things they do all day: see today's list, add a walk-in. That's the adoption bar.
+- **Owner dashboard** (revenue per stylist, no-show rate, repeat client rate) is what renews the subscription.
+
+Build the owner dashboard, but **never at the cost of the staff view**. If staff stop using it, the subscription churns in three weeks regardless of how good the analytics look.
+
+---
+
+## 8. MVP scope
+
+**In:**
+- Org + shop creation, staff and service setup
+- Public booking page per shop, mobile-first
+- Availability engine with the exclusion constraint
+- Walk-in entry, staff day view
+- M-Pesa deposit + idempotent callback handling
+- SMS/WhatsApp confirmation + one reminder
+- Owner dashboard: today's bookings, no-show rate, revenue per staff
+- Embeddable widget + public API for `/site`
+- Single client-initiated reschedule: moving one booking to another time, from the SMS manage link
+
+**Explicitly out — do not build these without being asked:**
+Clinics, inventory, POS, payroll/commission, loyalty points, multi-currency, native mobile app, multi-party rescheduling cascades, Google Calendar sync.
+
+Rescheduling needs the distinction spelled out, because the earlier wording was too broad. **A single client moving their own booking to another free slot is in scope** — it is one write against the availability engine, and the design makes it the primary action on both cancel screens because moving beats cancelling for everyone. What stays out is the *cascade*: shifting a booking that displaces another, negotiating between two clients, or rippling a staff schedule change across a day's appointments. One booking, one move, no knock-on.
+
+Clinics are out on purpose: appointment records tied to a medical practice edge into health data under the Kenya Data Protection Act 2019, which is a materially higher compliance burden. Clinics are a later phase with legal review, not a label change.
+
+---
+
+## 9. Compliance baseline
+
+Client names, phone numbers and visit history are personal data under the Kenya DPA 2019. BookNasi is a controller for its own users and a processor for its shops' clients. Any feature touching client data must keep these working: stated retention period, export path, delete path, processor clause honoured. Deleting a client must not orphan appointment records in a way that breaks reporting — soft-delete with PII scrub, not a cascade.
+
+---
+
+## 10. Design invariants — not themeable, not negotiable
+
+The design handoff isolates four things that survive any re-skin. They are not styling choices; they are the difference between a payment that completes and one that doesn't. A host embedding the widget can override accent, surface, canvas, border, radius, fonts and label casing — and can relabel "deposit" itself, since money words are copy tokens. It cannot touch these:
+
+1. **52 px minimum target height** on any interactive control. Staff use this standing, one-handed, with wet hands; clients use it on a phone on 3G. Walk-in rows go further, to 64–72 px.
+2. **Three-per-row slot grid.** Denser grids raise mis-taps on exactly the screen where a mis-tap books the wrong time. Wider ones push afternoon slots below the fold.
+3. **The hold countdown stays visible.** It is the only reason it is safe to ask a client to leave the page and open their M-Pesa PIN prompt. Hiding it turns a 3-minute hold into an unexplained failure.
+4. **The `*334#` USSD fallback line** on the STK waiting screen. When the push doesn't arrive — and it often doesn't — this is the difference between a completed deposit and an abandoned booking.
+
+These ship as constants in `packages/tokens`, never as CSS custom properties, so a host stylesheet physically cannot override them. The refund/forfeit sentence may be translated or relabelled but never removed.
+
+---
+
+## 11. Working conventions
+
+- **One slice at a time.** Foundation → org/shop/staff/service → availability engine → booking flow → payments → notifications → dashboard → widget. Each slice reviewed and committed before the next starts.
+- Write the test with the code. Availability and payment callbacks need concurrency tests, not just happy-path ones.
+- Migrations are reviewed by hand. The exclusion constraint and unique constraints go in migrations, never in a manual SQL step someone has to remember.
+- Don't add a dependency to solve something the stdlib or Django already does.
+- Ask before changing the data model shape in §3 or removing a constraint in §4/§5. Those are decisions, not implementation details.
+- Secrets come from the environment. Nothing real in `.env.example`.
+
+## 12. Decisions on record
+
+Settled 1 August 2026 at the close of design scoping. Implement these; don't re-litigate them. Two questions are still genuinely open and are listed at the bottom.
+
+**Identity**
+
+- **No client account and no OTP.** The client types a phone number at checkout; the STK push to that number is the verification. Booking management happens through a signed, expiring, single-appointment token delivered by SMS — the link is the session. An account requirement or an OTP step costs bookings at exactly the point where they are most likely to drop. The consequence is the deposit-free rule in §5: without a payment there is no verification, so a deposit-free service cannot be booked publicly.
+- **Per-person staff logins.** `Staff` is a bookable shop-level row linked to a `Membership`. Staff see only their own day. Shared logins would destroy per-staff revenue attribution, which is the owner dashboard's whole argument. A shared shop-device account is a plausible later addition — leave room for it, build nothing for it now.
+- **AuthGate is deferred.** Custom `User` on Django's own auth, phone as `USERNAME_FIELD` (staff invites arrive by SMS and salon staff often have no working email). No new auth dependency. Migrating to AuthGate later is a data move, not a redesign.
+
+**Money**
+
+- **The shop sets the deposit rule**, in three modes: flat KES, percentage of price, or none. Service creation **pre-fills 25%**. Us setting it centrally is a pricing decision inside someone else's business that we can't defend per-shop; leaving it blank means it stays blank.
+- **`refund_window_hours` ships in slice 2** with a default of 24, independent of the policy decision below.
+
+**Delivery**
+
+- **SMS first**, behind the provider interface, sender ID `BOOKNASI`. WhatsApp is a swap, not a rewrite.
+- **Subscription state is a plain enum.** No fair-use ceiling modelled, no limit enforcement, until there is a billing slice that needs it.
+- **Standalone-first.** The design's client flow assumes a shop-branded page; the widget is a second build target over the same `booking-core`, so shipping standalone first costs the `/site` path nothing.
+
+**Scope corrections made at the same time**
+
+- Reschedule is **in**, as a single move on a single booking — see §8.
+- The staff offline write queue is **out** of the staff-view slice. Optimistic render, retry, and a stale-read banner only. The full queue is tracked, not scheduled.
+- Balance collection at the shop and a cash payment type are **out of v1 entirely**. Do not build the affordances the design draws for them.
+- **"Anyone available" is earliest-available-slot**, not an assignment algorithm.
+- Owner adoption warnings ("Thika Rd has recorded no walk-ins in 9 days") are **out of v1**.
+
+### Still open — do not silently decide these
+
+1. **Exact refund and forfeit terms.** The window field ships in slice 2; the policy itself is decided before slice 7. Whatever it becomes, the client must read it before they pay.
+2. **The `slotLost` remedy.** The client paid, the callback was slow, and the slot went to someone else. The design's state machine names the state but draws no screen for it, and it is the worst support call this product can generate. Needs a screen and a defined remedy before slice 6 ships. Three options with trade-offs get written at slice 6 planning — not before.
+
+If a task requires one of these answered, surface it and propose an option — don't pick one and bury it in a commit.

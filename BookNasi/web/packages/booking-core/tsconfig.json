@@ -1,0 +1,22 @@
+{
+  "$comment": [
+    "booking-core is consumed three ways: by Next (through a tsconfig path, straight",
+    "from source), by `node --test` (through this build), and — from slice 10 — by",
+    "whatever bundles the widget. CommonJS output is the one that all three can read",
+    "without a loader flag, which is the only reason to prefer it here."
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

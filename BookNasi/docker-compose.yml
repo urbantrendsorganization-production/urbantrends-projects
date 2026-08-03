@@ -1,0 +1,67 @@
+name: booknasi
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: booknasi
+      POSTGRES_PASSWORD: booknasi
+      POSTGRES_DB: booknasi
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U booknasi"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    command: uv run python manage.py runserver 0.0.0.0:8000
+    environment: &django_env
+      DJANGO_SETTINGS_MODULE: config.settings.local
+      DATABASE_URL: postgres://booknasi:booknasi@postgres:5432/booknasi
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - .:/app
+    ports:
+      # Bound to loopback; Caddy is what faces the internet in production.
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  worker:
+    build: .
+    command: uv run celery -A config worker -l info
+    environment: *django_env
+    volumes:
+      - .:/app
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  beat:
+    build: .
+    command: uv run celery -A config beat -l info
+    environment: *django_env
+    volumes:
+      - .:/app
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+volumes:
+  postgres_data:
