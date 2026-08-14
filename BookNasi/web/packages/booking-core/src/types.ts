@@ -62,6 +62,33 @@ export interface Availability {
   by_staff: { staff_id: string; display_name: string; slots: Slot[] }[];
 }
 
+/**
+ * The payment, as the waiting screen needs it.
+ *
+ * `push_outstanding` is the field the countdown cannot do without. Without it,
+ * a client whose timer reaches 0:00 while Safaricom is still thinking is told
+ * their slot expired — which is the unexplained failure CLAUDE.md §10 invariant
+ * 3 exists to prevent, arriving through the one control the invariant protects.
+ * With it the screen says "still checking with M-Pesa" and stays honest.
+ *
+ * `message` is client-safe copy chosen by the server, never Safaricom's raw
+ * `ResultDesc`. "Merchant does not exist" is our problem, not the client's.
+ */
+export interface PaymentView {
+  /** `initiated | pushed | push_failed | succeeded | failed |
+   *  cancelled_by_user | unknown | superseded | orphaned`. */
+  state: string;
+  amount_kes: number;
+  /** What the client reads down the phone. Present as soon as a push exists. */
+  support_code: string;
+  mpesa_receipt: string;
+  /** A prompt may still be answered. See above. */
+  push_outstanding: boolean;
+  message: string;
+  /** The money arrived and the slot did not survive. Screen 8. */
+  slot_lost: boolean;
+}
+
 export interface Hold {
   id: string;
   status: string;
@@ -75,6 +102,10 @@ export interface Hold {
   price_kes: number;
   deposit_kes: number;
   balance_kes: number;
+  /** Null until a push has been attempted. */
+  payment: PaymentView | null;
+  /** The number on screen 5's fallback line and screen 8's footer. */
+  shop_phone: string;
 }
 
 export interface HoldRequest {
@@ -98,7 +129,29 @@ export interface FlowError {
 export const ANYONE = "anyone" as const;
 export type StaffChoice = string | typeof ANYONE;
 
-export type Step = "service" | "staff" | "slot" | "confirm" | "held";
+/**
+ * `held` is slice 5's hold with no payment against it. The five that follow are
+ * slice 6, and they are derived from the payment's state rather than set by the
+ * renderer — see `stepFor` in `machine.ts`. A screen the client can be *put*
+ * into is a screen that can disagree with the server about whether money moved.
+ *
+ * - `pushed`    — screen 5. The prompt is on the phone; the countdown runs.
+ * - `paid`      — screen 6. Receipt first; it is the proof at the door.
+ * - `failed`    — screen 7. Named reason, retry inside the remaining hold.
+ * - `timedOut`  — the push was never answered and the hold has gone.
+ * - `slotLost`  — screen 8. The money arrived, the slot did not survive.
+ */
+export type Step =
+  | "service"
+  | "staff"
+  | "slot"
+  | "confirm"
+  | "held"
+  | "pushed"
+  | "paid"
+  | "failed"
+  | "timedOut"
+  | "slotLost";
 
 export interface BookingState {
   step: Step;

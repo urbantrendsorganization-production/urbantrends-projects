@@ -31,8 +31,10 @@ import {
   type Service,
   blockedReason,
   canContinue,
+  canResend,
   clock,
-  countdown,
+  countdownLabel,
+  isPaymentStep,
   money,
   offeredSlots,
   refundSentence,
@@ -52,13 +54,22 @@ export function BookingScreens({ flow }: { flow: Flow }) {
   // The countdown's timer lives here, not in booking-core: a timer is a
   // resource the host page has opinions about, so the package computes seconds
   // from the server's expiry and the renderer decides how often to ask.
+  //
+  // Slice 6 adds the poll on the same beat. The client is watching a screen
+  // that has to rewrite itself when money they moved in a different app
+  // arrives at a server they cannot see, so it asks — every three seconds
+  // while a prompt is live, and once more when the timer reaches zero, because
+  // the server's grace window means zero is not the end of the story.
   useEffect(() => {
-    if (state.step !== "held") return;
+    const watching = state.step === "held" || state.step === "pushed" || state.step === "failed";
+    if (!watching) return;
     setSeconds(flow.tick());
+    let ticks = 0;
     const beat = setInterval(() => {
       const left = flow.tick();
       setSeconds(left);
-      if (left <= 0) void flow.refreshHold();
+      ticks += 1;
+      if (left <= 0 || ticks % 3 === 0) void flow.refreshHold();
     }, 1000);
     return () => clearInterval(beat);
   }, [flow, state.step, state.hold?.id]);
@@ -81,6 +92,16 @@ export function BookingScreens({ flow }: { flow: Flow }) {
       {state.step === "slot" && <SlotPicker state={state} flow={flow} />}
       {state.step === "confirm" && <Confirm state={state} flow={flow} />}
       {state.step === "held" && <Held state={state} flow={flow} seconds={seconds} />}
+
+      {/* Screens 5–8. Which one shows is `stepFor` in booking-core, derived
+          from the payment the server put on the hold — never set here. A
+          renderer that could choose would be a renderer that can put a client
+          on the paid screen when no money moved. */}
+      {state.step === "pushed" && <Pushed state={state} flow={flow} seconds={seconds} />}
+      {state.step === "paid" && <Paid state={state} />}
+      {state.step === "failed" && <Failed state={state} flow={flow} seconds={seconds} />}
+      {state.step === "timedOut" && <TimedOut state={state} flow={flow} />}
+      {state.step === "slotLost" && <SlotLost state={state} />}
     </main>
   );
 }
@@ -99,6 +120,11 @@ function Header({ state, onBack }: { state: BookingState; onBack: () => void }) 
     slot: "When?",
     confirm: "Confirm and pay",
     held: "Your slot is held",
+    pushed: "Check your phone",
+    paid: "Booked",
+    failed: "That payment didn't go through",
+    timedOut: "The hold has run out",
+    slotLost: "We received your payment",
   };
   return (
     <header style={{ padding: "var(--bn-space-9) var(--bn-space-gutter) var(--bn-space-7)" }}>
@@ -120,13 +146,15 @@ function Header({ state, onBack }: { state: BookingState; onBack: () => void }) 
         >
           {titles[state.step]}
         </h1>
-        {state.step !== "held" && (
+        {state.step !== "held" && !isPaymentStep(state.step) && (
           <span className="bn-money" style={{ color: "var(--bn-ink-45)" }}>
             {stepNumber(state)} / 4
           </span>
         )}
       </div>
-      {state.step !== "service" && state.step !== "held" && (
+      {/* No Back on a payment screen. The money either moved or it did not, and
+          a back arrow that appears to undo it is the most expensive lie here. */}
+      {state.step !== "service" && state.step !== "held" && !isPaymentStep(state.step) && (
         <button
           type="button"
           onClick={onBack}
@@ -624,18 +652,16 @@ function Confirm({ state, flow }: { state: BookingState; flow: Flow }) {
 // --------------------------------------------------- the hold, with no payment
 
 /**
- * What the confirm screen becomes while the hold is live and no payment can be
- * made — slice 5 has no Daraja.
+ * The hold with no payment against it.
  *
- * The countdown is here and always visible (CLAUDE.md §10, invariant 3), for
- * exactly the reason it will matter in slice 6: it is what makes it safe to
- * tell a client to leave the page. Slice 6 replaces the middle of this screen
- * with the dark STK waiting state and the `*334#` line; the timer, the release
- * and the "your slot came back" path are all already here and tested.
+ * Slice 5's whole screen; in slice 6 it is the brief moment between the hold
+ * being created and the STK push being accepted, plus the case where the push
+ * was refused before it ever went out. The countdown is here and always visible
+ * (CLAUDE.md §10, invariant 3), because it is what makes it safe to tell a
+ * client to leave the page.
  */
 function Held({ state, flow, seconds }: { state: BookingState; flow: Flow; seconds: number }) {
   const hold = state.hold!;
-  const total = (state.shop?.hold_ttl_minutes ?? 3) * 60;
   return (
     <section style={{ padding: "0 var(--bn-space-gutter)", display: "grid", gap: "var(--bn-space-7)" }}>
       <Card>
@@ -647,53 +673,7 @@ function Held({ state, flow, seconds }: { state: BookingState; flow: Flow; secon
         </p>
       </Card>
 
-      {/* Invariant 3. Never hidden, never behind a tap, and it counts the
-          server's expiry rather than a local timer that could drift. */}
-      <div
-        style={{
-          padding: "var(--bn-space-7)",
-          borderRadius: "var(--bn-radius-panel)",
-          background: "var(--bn-hold-50)",
-          color: "var(--bn-hold-700)",
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-          <span style={{ fontSize: "var(--bn-text-body-size)" }}>Slot held for</span>
-          <span
-            className="bn-time"
-            style={{ fontSize: "var(--bn-text-money-size)", fontWeight: 600 }}
-          >
-            {countdown(seconds)}
-          </span>
-        </div>
-        <div
-          aria-hidden
-          style={{
-            marginTop: "var(--bn-space-5)",
-            height: 6,
-            borderRadius: 999,
-            background: "var(--bn-track)",
-            overflow: "hidden",
-          }}
-        >
-          <div
-            style={{
-              width: `${Math.max(0, Math.min(100, (seconds / total) * 100))}%`,
-              height: "100%",
-              background: "var(--bn-hold-600)",
-              // Linear. A timer that eases is a timer that lies.
-              transition: "width 1s linear",
-            }}
-          />
-        </div>
-        <p style={{ margin: "var(--bn-space-6) 0 0", fontSize: "var(--bn-text-body-sm-size)" }}>
-          {seconds > 0
-            ? `Nobody else can take ${hold.local_time} until the timer runs out. ` +
-              `Payment by M-Pesa is not switched on yet — the shop will take your ` +
-              `${money(hold.deposit_kes)} deposit when you arrive.`
-            : "The hold has run out and the slot is back in the list."}
-        </p>
-      </div>
+      <WaitingPanel state={state} seconds={seconds} />
 
       <button
         type="button"
@@ -714,6 +694,431 @@ function Held({ state, flow, seconds }: { state: BookingState; flow: Flow; secon
       </button>
     </section>
   );
+}
+
+// ------------------------------------------------------- screens 5–8, slice 6
+
+/**
+ * Screen 5. The prompt is on the phone and we are waiting.
+ *
+ * Three things on this screen are not decoration:
+ *
+ * 1. **The countdown**, from `countdownLabel` rather than from the raw number.
+ *    Past zero with a push still outstanding it says "Still checking with
+ *    M-Pesa", because the server is still holding the slot and a timer that
+ *    said "expired" would be lying about the thing it exists to report.
+ *    CLAUDE.md §10, invariant 3.
+ * 2. **The `*334#` line.** Invariant 4. When the push does not arrive — and it
+ *    often does not — this is the difference between a completed deposit and
+ *    an abandoned booking. It is never behind a tap.
+ * 3. **The shop's phone number, with the truth next to it.** This replaces the
+ *    design's "Pay at the shop instead". That control implied the slot was
+ *    being held while the client travelled, and it is not, so it is gone and
+ *    the sentence that says so is in its place.
+ */
+export function Pushed({
+  state,
+  flow,
+  seconds,
+}: {
+  state: BookingState;
+  flow: Flow;
+  seconds: number;
+}) {
+  const hold = state.hold!;
+  const payment = hold.payment;
+  return (
+    <section
+      style={{ padding: "0 var(--bn-space-gutter)", display: "grid", gap: "var(--bn-space-7)" }}
+    >
+      <WaitingPanel state={state} seconds={seconds} />
+
+      <Card>
+        <p style={{ margin: 0, fontSize: "var(--bn-text-body-lg-size)" }}>
+          Enter your M-Pesa PIN to pay{" "}
+          <strong className="bn-money">{money(payment?.amount_kes ?? hold.deposit_kes)}</strong>.
+        </p>
+        <p
+          style={{
+            margin: "var(--bn-space-5) 0 0",
+            color: "var(--bn-ink-70)",
+            fontSize: "var(--bn-text-body-size)",
+          }}
+        >
+          {/* Invariant 4. Read from the token, not typed here, so it cannot be
+              edited away by a re-skin. */}
+          No prompt? Dial <strong className="bn-money">{INVARIANTS.ussdFallback}</strong> and choose
+          M-Pesa, then Pay Bill.
+        </p>
+      </Card>
+
+      <button
+        type="button"
+        onClick={() => void flow.resend()}
+        disabled={!canResend(state, seconds)}
+        style={secondaryButton(canResend(state, seconds))}
+      >
+        {state.busy ? "Sending…" : "Resend the prompt"}
+      </button>
+
+      <ShopFallback hold={hold} />
+    </section>
+  );
+}
+
+/** Screen 6. The receipt is first because it is the client's proof at the door. */
+export function Paid({ state }: { state: BookingState }) {
+  const hold = state.hold!;
+  const payment = hold.payment;
+  return (
+    <section
+      style={{ padding: "0 var(--bn-space-gutter)", display: "grid", gap: "var(--bn-space-7)" }}
+    >
+      <div
+        style={{
+          padding: "var(--bn-space-9) var(--bn-space-7)",
+          borderRadius: "var(--bn-radius-panel)",
+          background: "var(--bn-pay-50)",
+          color: "var(--bn-pay-700)",
+        }}
+      >
+        {/* The design puts the M-Pesa code above everything else, and it is
+            right: it is the one thing the client shows at the door. */}
+        <p
+          style={{
+            margin: 0,
+            fontSize: "var(--bn-text-label-size)",
+            letterSpacing: "var(--bn-text-label-tracking)",
+            textTransform: "uppercase",
+          }}
+        >
+          M-Pesa
+        </p>
+        <p
+          className="bn-money"
+          style={{
+            margin: "var(--bn-space-2) 0 0",
+            fontSize: "var(--bn-text-money-size)",
+            fontWeight: 600,
+          }}
+        >
+          {payment?.mpesa_receipt || payment?.support_code}
+        </p>
+        <p style={{ margin: "var(--bn-space-5) 0 0", fontSize: "var(--bn-text-body-size)" }}>
+          {money(payment?.amount_kes ?? hold.deposit_kes)} received.
+        </p>
+      </div>
+
+      <Card>
+        <div className="bn-time" style={{ fontSize: "var(--bn-text-money-size)", fontWeight: 600 }}>
+          {clock(hold.starts_at)} · {hold.staff_name}
+        </div>
+        <p style={{ margin: "var(--bn-space-2) 0 0", color: "var(--bn-ink-45)" }}>
+          {hold.service_name}
+        </p>
+        <div style={{ marginTop: "var(--bn-space-6)" }}>
+          <Line label="Balance at the shop" value={money(hold.balance_kes)} />
+        </div>
+      </Card>
+
+      <p
+        style={{
+          margin: 0,
+          color: "var(--bn-ink-70)",
+          fontSize: "var(--bn-text-body-sm-size)",
+        }}
+      >
+        {/* Trimmed to what slice 8 will actually send. The design's footnote
+            promised a reminder schedule that does not exist yet, and a
+            promise the product cannot keep is worse than no promise. */}
+        We've sent you a confirmation by SMS.
+      </p>
+    </section>
+  );
+}
+
+/**
+ * Screen 7. The payment failed and the hold is still alive.
+ *
+ * The countdown stays, because the retry has to happen inside it. The design's
+ * "book a service with no deposit instead" offer is **not** here: it sends a
+ * client hunting through a service list at the worst possible moment, and the
+ * thing they wanted is still available for the next minute or two.
+ */
+export function Failed({
+  state,
+  flow,
+  seconds,
+}: {
+  state: BookingState;
+  flow: Flow;
+  seconds: number;
+}) {
+  const hold = state.hold!;
+  return (
+    <section
+      style={{ padding: "0 var(--bn-space-gutter)", display: "grid", gap: "var(--bn-space-7)" }}
+    >
+      <div
+        style={{
+          padding: "var(--bn-space-7)",
+          borderRadius: "var(--bn-radius-card)",
+          background: "var(--bn-fail-50)",
+          color: "var(--bn-fail-700)",
+          fontSize: "var(--bn-text-body-lg-size)",
+        }}
+      >
+        {/* The server's copy, not Safaricom's raw ResultDesc. "Merchant does
+            not exist" is our problem, not the client's. */}
+        {hold.payment?.message}
+      </div>
+
+      <WaitingPanel state={state} seconds={seconds} />
+
+      <button
+        type="button"
+        onClick={() => void flow.resend()}
+        disabled={!canResend(state, seconds)}
+        style={secondaryButton(canResend(state, seconds), true)}
+      >
+        {state.busy ? "Sending…" : "Try again"}
+      </button>
+
+      <p
+        style={{
+          margin: 0,
+          color: "var(--bn-ink-70)",
+          fontSize: "var(--bn-text-body-size)",
+        }}
+      >
+        Or dial <strong className="bn-money">{INVARIANTS.ussdFallback}</strong> and pay by Pay Bill.
+      </p>
+
+      <ShopFallback hold={hold} />
+    </section>
+  );
+}
+
+/** The hold ran out and no money moved. The slot is genuinely back in the list. */
+function TimedOut({ state, flow }: { state: BookingState; flow: Flow }) {
+  const hold = state.hold!;
+  return (
+    <section
+      style={{ padding: "0 var(--bn-space-gutter)", display: "grid", gap: "var(--bn-space-7)" }}
+    >
+      <Card>
+        <p style={{ margin: 0, fontSize: "var(--bn-text-body-lg-size)" }}>
+          {hold.local_time} is back in the list and nothing was taken from your M-Pesa.
+        </p>
+      </Card>
+      <button
+        type="button"
+        onClick={() => void flow.release()}
+        style={secondaryButton(true, true)}
+      >
+        Pick another time
+      </button>
+      <ShopFallback hold={hold} />
+    </section>
+  );
+}
+
+/**
+ * Screen 8. The money arrived and the slot did not survive — `slotLost`.
+ *
+ * The design said "automatic refund within 24 hr". Nothing automatic exists,
+ * the money is with the shop rather than with us, and a promise the product
+ * cannot keep is the worst thing to put on the one screen where the client is
+ * already unhappy. So this says what actually happens: the shop calls, within
+ * the hour, and the support code is what the call is about.
+ *
+ * Slice 7 replaces the phone call with a "pick another time and carry your
+ * deposit" button. The support code stays either way.
+ */
+export function SlotLost({ state }: { state: BookingState }) {
+  const hold = state.hold!;
+  const payment = hold.payment;
+  return (
+    <section
+      style={{ padding: "0 var(--bn-space-gutter)", display: "grid", gap: "var(--bn-space-7)" }}
+    >
+      <div
+        style={{
+          padding: "var(--bn-space-9) var(--bn-space-7)",
+          borderRadius: "var(--bn-radius-panel)",
+          background: "var(--bn-fail-50)",
+          color: "var(--bn-fail-700)",
+        }}
+      >
+        <p style={{ margin: 0, fontSize: "var(--bn-text-body-lg-size)" }}>
+          We received your {money(payment?.amount_kes ?? hold.deposit_kes)}, but {hold.local_time}{" "}
+          was taken while the payment was going through.
+        </p>
+        <p style={{ margin: "var(--bn-space-6) 0 0", fontSize: "var(--bn-text-body-size)" }}>
+          Your money is with the shop and they will call you within the hour.
+        </p>
+      </div>
+
+      <Card>
+        <p
+          style={{
+            margin: 0,
+            fontSize: "var(--bn-text-label-size)",
+            letterSpacing: "var(--bn-text-label-tracking)",
+            textTransform: "uppercase",
+            color: "var(--bn-ink-45)",
+          }}
+        >
+          Quote this code
+        </p>
+        <p
+          className="bn-money"
+          style={{
+            margin: "var(--bn-space-2) 0 0",
+            fontSize: "var(--bn-text-money-size)",
+            fontWeight: 600,
+          }}
+        >
+          {payment?.support_code}
+        </p>
+        {payment?.mpesa_receipt && (
+          <p
+            style={{
+              margin: "var(--bn-space-4) 0 0",
+              color: "var(--bn-ink-45)",
+              fontSize: "var(--bn-text-body-sm-size)",
+            }}
+          >
+            M-Pesa {payment.mpesa_receipt}
+          </p>
+        )}
+      </Card>
+
+      {hold.shop_phone && (
+        <a href={`tel:${hold.shop_phone}`} style={{ ...secondaryButton(true, true), display: "grid", placeItems: "center", textDecoration: "none" }}>
+          Call {hold.shop_phone}
+        </a>
+      )}
+    </section>
+  );
+}
+
+/**
+ * The countdown, shared by screens 5 and 7. Invariant 3: always visible, never
+ * behind a tap, and it renders `countdownLabel` rather than a bare number so
+ * that zero-with-a-push-outstanding reads as "still checking" and not as a
+ * failure the server has not actually declared.
+ */
+function WaitingPanel({ state, seconds }: { state: BookingState; seconds: number }) {
+  const hold = state.hold!;
+  const total = (state.shop?.hold_ttl_minutes ?? 3) * 60;
+  const label = countdownLabel(state, seconds);
+  const stillChecking = seconds <= 0 && (hold.payment?.push_outstanding ?? false);
+  return (
+    <div
+      style={{
+        padding: "var(--bn-space-7)",
+        borderRadius: "var(--bn-radius-panel)",
+        background: "var(--bn-hold-50)",
+        color: "var(--bn-hold-700)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "baseline",
+          gap: "var(--bn-space-5)",
+        }}
+      >
+        <span style={{ fontSize: "var(--bn-text-body-size)" }}>
+          {stillChecking ? "Your slot" : "Slot held for"}
+        </span>
+        <span
+          className="bn-time"
+          style={{
+            fontSize: stillChecking ? "var(--bn-text-body-size)" : "var(--bn-text-money-size)",
+            fontWeight: 600,
+            textAlign: "right",
+          }}
+        >
+          {label}
+        </span>
+      </div>
+      <div
+        aria-hidden
+        style={{
+          marginTop: "var(--bn-space-5)",
+          height: 6,
+          borderRadius: 999,
+          background: "var(--bn-track)",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            width: `${Math.max(0, Math.min(100, (seconds / total) * 100))}%`,
+            height: "100%",
+            background: "var(--bn-hold-600)",
+            // Linear. A timer that eases is a timer that lies.
+            transition: "width 1s linear",
+          }}
+        />
+      </div>
+      <p style={{ margin: "var(--bn-space-6) 0 0", fontSize: "var(--bn-text-body-sm-size)" }}>
+        {stillChecking
+          ? "M-Pesa is slow sometimes. We're still holding your time while we check."
+          : `Nobody else can take ${hold.local_time} until the timer runs out.`}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * The shop's number, and the sentence that has to sit next to it.
+ *
+ * This is what replaced "Pay at the shop instead". That button implied the slot
+ * was being held while the client made their way over, which it is not — the
+ * hold is a few minutes long and the deposit is what keeps it. Offering a
+ * WhatsApp link instead would have made the same implication more politely.
+ */
+function ShopFallback({ hold }: { hold: NonNullable<BookingState["hold"]> }) {
+  if (!hold.shop_phone) return null;
+  return (
+    <p
+      style={{
+        margin: 0,
+        color: "var(--bn-ink-70)",
+        fontSize: "var(--bn-text-body-sm-size)",
+        lineHeight: 1.5,
+      }}
+    >
+      Stuck? Call the shop on{" "}
+      <a href={`tel:${hold.shop_phone}`} className="bn-money" style={{ color: "var(--bn-ink)" }}>
+        {hold.shop_phone}
+      </a>
+      . This time is not being held for you once the timer runs out.
+    </p>
+  );
+}
+
+function secondaryButton(enabled: boolean, prominent = false): React.CSSProperties {
+  return {
+    minHeight: INVARIANTS.minTargetHeightPx,
+    borderRadius: "var(--bn-radius-md)",
+    border: prominent ? "none" : "1.5px solid var(--bn-border)",
+    background: prominent
+      ? enabled
+        ? "var(--bn-accent)"
+        : "var(--bn-line)"
+      : "var(--bn-surface)",
+    color: prominent ? (enabled ? "#fff" : "var(--bn-ink-disabled)") : "var(--bn-ink)",
+    fontFamily: "var(--bn-font-ui)",
+    fontSize: "var(--bn-text-body-lg-size)",
+    fontWeight: 600,
+    cursor: enabled ? "pointer" : "default",
+    opacity: enabled ? 1 : 0.6,
+  };
 }
 
 // ------------------------------------------------------------------- pieces

@@ -26,6 +26,9 @@ export interface Transport {
   createHold(slug: string, request: HoldRequest): Promise<Hold>;
   getHold(holdId: string): Promise<Hold>;
   releaseHold(holdId: string): Promise<Hold>;
+  /** A second STK prompt for a hold that already has one. Refused by the
+   *  server past its rate, count or grace ceiling — see `flow.resend`. */
+  resendPush(holdId: string): Promise<Hold>;
 }
 
 export class TransportError extends Error {
@@ -85,5 +88,6 @@ export function httpTransport({
       call(`/shops/${slug}/holds/`, { method: "POST", body: request }),
     getHold: (holdId) => call(`/holds/${holdId}/`),
     releaseHold: (holdId) => call(`/holds/${holdId}/release/`, { method: "POST" }),
+    resendPush: (holdId) => call(`/holds/${holdId}/resend/`, { method: "POST" }),
   };
 }

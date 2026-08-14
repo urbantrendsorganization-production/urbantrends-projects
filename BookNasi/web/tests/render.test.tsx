@@ -128,3 +128,220 @@ test("slots split into morning and afternoon, as the design groups them", () => 
   assert.ok(html.includes("Morning"));
   assert.ok(html.includes("Afternoon"));
 });
+
+// ------------------------------------------------ screens 5–8, slice 6
+//
+// The four things these assert are the ones a token file cannot see and a
+// state-machine test cannot reach: that invariants 3 and 4 arrive in the
+// markup, and that three specific pieces of copy the design drew are **not**
+// there. Each of those three was removed for a stated reason, and a reason
+// that only lives in a commit message is a reason that gets reverted.
+
+import { Failed, Paid, Pushed, SlotLost } from "../components/booking/BookingFlow";
+import type { BookingState, Hold, PaymentView } from "@booknasi/booking-core";
+
+function paymentView(over: Partial<PaymentView> = {}): PaymentView {
+  return {
+    state: "pushed",
+    amount_kes: 875,
+    support_code: "BK-4F7K2Q",
+    mpesa_receipt: "",
+    push_outstanding: true,
+    message: "",
+    slot_lost: false,
+    ...over,
+  };
+}
+
+function holdWith(payment: PaymentView | null, over: Partial<Hold> = {}): Hold {
+  return {
+    id: "hold-1",
+    status: "pending_payment",
+    starts_at: "2026-09-09T07:00:00Z",
+    ends_at: "2026-09-09T10:30:00Z",
+    local_time: "10:00",
+    hold_expires_at: "2026-09-09T06:03:00Z",
+    seconds_remaining: 180,
+    staff_name: "Wanjiku",
+    service_name: "Knotless braids",
+    price_kes: 3500,
+    deposit_kes: 875,
+    balance_kes: 2625,
+    payment,
+    shop_phone: "+254712000111",
+    ...over,
+  };
+}
+
+function stateWith(hold: Hold, step: BookingState["step"]): BookingState {
+  return {
+    step,
+    shop: null,
+    services: [],
+    service: null,
+    staffOptions: [],
+    staffChoice: null,
+    date: null,
+    availability: null,
+    slot: null,
+    phone: "0712345678",
+    hold,
+    busy: false,
+    error: null,
+  };
+}
+
+const noopFlow = { resend: async () => null, release: async () => null } as any;
+
+test("the STK waiting screen carries the *334# fallback, from the token", () => {
+  // CLAUDE.md §10, invariant 4. When the push does not arrive — and it often
+  // does not — this line is the difference between a completed deposit and an
+  // abandoned booking. It is never behind a tap.
+  const html = renderToStaticMarkup(
+    <Pushed state={stateWith(holdWith(paymentView()), "pushed")} flow={noopFlow} seconds={140} />
+  );
+
+  assert.ok(html.includes(INVARIANTS.ussdFallback), "the USSD fallback must be on screen 5");
+});
+
+test("the countdown is on the waiting screen and shows the real time left", () => {
+  // Invariant 3. It is the only reason it is safe to ask a client to leave the
+  // page for their M-Pesa PIN prompt.
+  const html = renderToStaticMarkup(
+    <Pushed state={stateWith(holdWith(paymentView()), "pushed")} flow={noopFlow} seconds={140} />
+  );
+
+  assert.ok(html.includes("2:20"), "the countdown must be rendered, not implied");
+});
+
+test("a countdown at zero with a push still live says so instead of claiming to have expired", () => {
+  // The server holds the slot through its grace window. A timer that said
+  // "expired" here would be lying about the thing it exists to report, which is
+  // the unexplained failure invariant 3 names.
+  const html = renderToStaticMarkup(
+    <Pushed state={stateWith(holdWith(paymentView()), "pushed")} flow={noopFlow} seconds={0} />
+  );
+
+  assert.ok(html.includes("Still checking with M-Pesa"));
+  assert.ok(!html.includes("has run out"));
+});
+
+test("every control on the waiting screen meets the 52px floor", () => {
+  const html = renderToStaticMarkup(
+    <Pushed state={stateWith(holdWith(paymentView()), "pushed")} flow={noopFlow} seconds={140} />
+  );
+
+  for (const match of html.matchAll(/min-height:\s*(\d+)px/g)) {
+    const value = Number(match[1]);
+    assert.ok(
+      value >= INVARIANTS.minTargetHeightPx,
+      `a control is ${value}px, below the ${INVARIANTS.minTargetHeightPx}px floor`
+    );
+  }
+});
+
+test('"Pay at the shop instead" is gone, and the truth is in its place', () => {
+  // That control implied the slot was held while the client made their way
+  // over, and it is not. A WhatsApp link would have made the same implication
+  // more politely, which is why it was not the replacement either.
+  const html = readable(
+    renderToStaticMarkup(
+      <Pushed state={stateWith(holdWith(paymentView()), "pushed")} flow={noopFlow} seconds={140} />
+    )
+  );
+
+  assert.ok(!/pay at the shop/i.test(html));
+  assert.ok(!/whatsapp/i.test(html));
+  assert.ok(html.includes("+254712000111"), "the shop's number replaces it");
+  assert.ok(html.includes("not being held for you"), "and says plainly that the slot is not held");
+});
+
+test("the paid screen leads with the M-Pesa receipt", () => {
+  // The design puts it above everything else and is right: it is the one thing
+  // the client shows at the door.
+  const paid = paymentView({
+    state: "succeeded",
+    push_outstanding: false,
+    mpesa_receipt: "SJ42K19XQ7",
+  });
+  const html = renderToStaticMarkup(
+    <Paid state={stateWith(holdWith(paid, { status: "confirmed" }), "paid")} />
+  );
+
+  assert.ok(html.indexOf("SJ42K19XQ7") < html.indexOf("Knotless braids"));
+});
+
+test("the paid screen promises only the SMS slice 8 will actually send", () => {
+  // The design's footnote described a reminder schedule that does not exist
+  // yet. A promise the product cannot keep is worse than no promise.
+  const paid = paymentView({ state: "succeeded", push_outstanding: false, mpesa_receipt: "SJ1" });
+  const html = readable(
+    renderToStaticMarkup(<Paid state={stateWith(holdWith(paid, { status: "confirmed" }), "paid")} />)
+  );
+
+  assert.ok(html.includes("confirmation by SMS"));
+  assert.ok(!/remind/i.test(html), "reminders are slice 8 and must not be promised here");
+  assert.ok(!/24 hours before|2 hours before/i.test(html));
+});
+
+test("the failure screen names the reason and offers no deposit-free detour", () => {
+  // Sending a client hunting through a service list at the worst possible
+  // moment is not a remedy. The thing they wanted is still theirs for another
+  // minute or two, which is what the retry is for.
+  const failed = paymentView({
+    state: "failed",
+    push_outstanding: false,
+    message: "There wasn't enough in that M-Pesa balance.",
+  });
+  const html = readable(
+    renderToStaticMarkup(
+      <Failed state={stateWith(holdWith(failed), "failed")} flow={noopFlow} seconds={90} />
+    )
+  );
+
+  assert.ok(html.includes("There wasn't enough in that M-Pesa balance."));
+  assert.ok(!/no deposit|without a deposit|deposit-free/i.test(html));
+  assert.ok(html.includes("1:30"), "the countdown stays — the retry happens inside it");
+});
+
+test("screen 8 says the shop calls, and never promises an automatic refund", () => {
+  // The design said "automatic refund within 24 hr". Nothing automatic exists,
+  // the money is with the shop rather than with us, and a promise the product
+  // cannot keep is the worst thing to put on the one screen where the client is
+  // already unhappy.
+  const lost = paymentView({
+    state: "orphaned",
+    push_outstanding: false,
+    mpesa_receipt: "SJ42K19XQ7",
+    slot_lost: true,
+  });
+  const html = readable(
+    renderToStaticMarkup(
+      <SlotLost state={stateWith(holdWith(lost, { status: "cancelled" }), "slotLost")} />
+    )
+  );
+
+  assert.ok(!/refund/i.test(html), "no refund promise — the money is with the shop");
+  assert.ok(!/24 ?h|24 hour/i.test(html));
+  assert.ok(html.includes("call you within the hour"));
+  assert.ok(html.includes("Your money is with the shop"));
+});
+
+test("screen 8 shows the support code the client reads down the phone", () => {
+  // The owner dashboard is slice 9. A code nobody can look up would be
+  // decoration; `payments/tests/test_support_code.py` proves the lookup works
+  // now, and this proves the client is actually given the code to quote.
+  const lost = paymentView({
+    state: "orphaned",
+    push_outstanding: false,
+    mpesa_receipt: "SJ42K19XQ7",
+    slot_lost: true,
+  });
+  const html = renderToStaticMarkup(
+    <SlotLost state={stateWith(holdWith(lost, { status: "cancelled" }), "slotLost")} />
+  );
+
+  assert.ok(html.includes("BK-4F7K2Q"));
+  assert.ok(html.includes("Quote this code"));
+  assert.ok(html.includes("tel:+254712000111"), "and the number to quote it to");
+});

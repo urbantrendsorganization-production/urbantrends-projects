@@ -11,17 +11,31 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  ORDER,
+  PAYMENT_STEPS,
   blockedReason,
   canContinue,
+  canResend,
+  countdownLabel,
   initialState,
   isHoldExpired,
+  isPaymentStep,
   offeredSlots,
   reduce,
   secondsRemaining,
+  slotIsStillHeld,
+  stepFor,
   stepNumber,
 } from "./machine";
 import { countdown, money, refundSentence, spellDuration } from "./money";
-import { ANYONE, type AnyStaffSlot, type Availability, type Hold, type Service } from "./types";
+import {
+  ANYONE,
+  type AnyStaffSlot,
+  type Availability,
+  type Hold,
+  type PaymentView,
+  type Service,
+} from "./types";
 
 const BRAIDS: Service = {
   id: "svc-braids",
@@ -221,6 +235,10 @@ const HOLD: Hold = {
   price_kes: 3500,
   deposit_kes: 875,
   balance_kes: 2625,
+  // Slice 6. Null until a push has been attempted — the moment between the
+  // hold existing and the prompt being accepted is real and short.
+  payment: null,
+  shop_phone: "+254712000111",
 };
 
 test("the countdown is computed from the server's expiry, not a local timer", () => {
@@ -282,4 +300,216 @@ test("the refund sentence survives the host relabelling 'deposit'", () => {
   assert.match(refundSentence(24), /24 hours/);
   assert.match(refundSentence(24), /deposit/);
   assert.match(refundSentence(48, "reservation fee"), /reservation fee is refunded/);
+});
+
+// ------------------------------------------------------ the payment screens
+
+/**
+ * Slice 6. Every one of these asserts the same rule from a different angle:
+ * **the step is derived from the payment, never set.** A renderer that could
+ * choose the screen is a renderer that can tell a client their booking is paid
+ * for when no money moved.
+ */
+
+function payment(over: Partial<PaymentView> = {}): PaymentView {
+  return {
+    state: "pushed",
+    amount_kes: 875,
+    support_code: "BK-4F7K2Q",
+    mpesa_receipt: "",
+    push_outstanding: true,
+    message: "",
+    slot_lost: false,
+    ...over,
+  };
+}
+
+test("a hold with no payment yet is the plain held screen", () => {
+  assert.equal(stepFor(HOLD), "held");
+});
+
+test("a live prompt is screen 5", () => {
+  assert.equal(stepFor({ ...HOLD, payment: payment() }), "pushed");
+});
+
+test("a live prompt stays on screen 5 even after the countdown reaches zero", () => {
+  // The server holds the slot through a grace window for exactly this. A screen
+  // that gave up here would be giving up ahead of the thing it is reporting on,
+  // which is the unexplained failure CLAUDE.md §10 invariant 3 names.
+  assert.equal(stepFor({ ...HOLD, payment: payment() }, true), "pushed");
+});
+
+test("a succeeded payment is screen 6", () => {
+  const paid = payment({ state: "succeeded", push_outstanding: false, mpesa_receipt: "SJ42K19XQ7" });
+  assert.equal(stepFor({ ...HOLD, status: "confirmed", payment: paid }), "paid");
+});
+
+test("a failure with the hold still alive is screen 7", () => {
+  const failed = payment({
+    state: "cancelled_by_user",
+    push_outstanding: false,
+    message: "You cancelled the payment on your phone.",
+  });
+  assert.equal(stepFor({ ...HOLD, payment: failed }), "failed");
+});
+
+test("the same failure once the hold has gone is timedOut, not screen 7", () => {
+  // The reason stops mattering once there is nothing left to retry into.
+  const failed = payment({
+    state: "failed",
+    push_outstanding: false,
+    message: "There wasn't enough in the M-Pesa balance.",
+  });
+  assert.equal(stepFor({ ...HOLD, payment: failed }, true), "timedOut");
+});
+
+test("slot_lost outranks a succeeded payment", () => {
+  // It *is* a succeeded payment — one with nowhere to sit. Screen 6 here would
+  // tell a client their booking is confirmed while somebody else is in the chair.
+  const lost = payment({
+    state: "orphaned",
+    push_outstanding: false,
+    mpesa_receipt: "SJ42K19XQ7",
+    slot_lost: true,
+  });
+  assert.equal(stepFor({ ...HOLD, status: "cancelled", payment: lost }), "slotLost");
+});
+
+test("a push Daraja refused is the failure screen, not 'check your phone'", () => {
+  // The rejection came from the push call, so there is no ResultCode and
+  // therefore no `message`, and `push_outstanding` is false — no prompt was
+  // ever sent. Without an explicit branch this fell through to the
+  // `payment ? "pushed"` default and sat the client on "Enter your M-Pesa PIN"
+  // waiting for a prompt that does not exist, until the hold expired.
+  const refused = payment({
+    state: "push_failed",
+    push_outstanding: false,
+    message: "",
+  });
+
+  assert.equal(stepFor({ ...HOLD, payment: refused }), "failed");
+});
+
+test("a refused push after the timer has gone is timedOut, not failed", () => {
+  const refused = payment({ state: "push_failed", push_outstanding: false, message: "" });
+
+  assert.equal(stepFor({ ...HOLD, payment: refused }, true), "timedOut");
+});
+
+test("the reducer passes the caller's clock through to stepFor", () => {
+  // `stepFor` has always taken an `expired` flag and no caller ever passed one,
+  // so a hold whose timer had run out kept showing screen 7's "Nobody else can
+  // take 10:00 until the timer runs out" under a clock reading 0:00 — for as
+  // long as it took the server sweep to cancel the hold.
+  const failed = payment({
+    state: "failed",
+    push_outstanding: false,
+    message: "M-Pesa didn't complete the payment. Nothing was taken.",
+  });
+  const afterExpiry = Date.parse(HOLD.hold_expires_at) + 1_000;
+  const beforeExpiry = Date.parse(HOLD.hold_expires_at) - 30_000;
+
+  const stillRunning = reduce(initialState, {
+    type: "HOLD_UPDATED",
+    hold: { ...HOLD, payment: failed },
+    now: beforeExpiry,
+  });
+  assert.equal(stillRunning.step, "failed");
+
+  const gone = reduce(initialState, {
+    type: "HOLD_UPDATED",
+    hold: { ...HOLD, payment: failed },
+    now: afterExpiry,
+  });
+  assert.equal(gone.step, "timedOut");
+});
+
+test("an outstanding push still outranks an expired timer", () => {
+  // The server's grace window. `stepFor` consults `push_outstanding` before it
+  // ever reaches `expired`, so passing the clock through must not start
+  // contradicting invariant 3 — see `slotIsStillHeld`.
+  const live = payment({ push_outstanding: true });
+  const afterExpiry = Date.parse(HOLD.hold_expires_at) + 1_000;
+
+  const state = reduce(initialState, {
+    type: "HOLD_UPDATED",
+    hold: { ...HOLD, payment: live },
+    now: afterExpiry,
+  });
+
+  assert.equal(state.step, "pushed");
+});
+
+test("the reducer takes the step from the hold on every update", () => {
+  let state = reduce(initialState, { type: "HOLD_CREATED", hold: HOLD });
+  assert.equal(state.step, "held");
+
+  state = reduce(state, { type: "HOLD_UPDATED", hold: { ...HOLD, payment: payment() } });
+  assert.equal(state.step, "pushed");
+
+  const paid = payment({ state: "succeeded", push_outstanding: false, mpesa_receipt: "SJ1" });
+  state = reduce(state, {
+    type: "HOLD_UPDATED",
+    hold: { ...HOLD, status: "confirmed", payment: paid },
+  });
+  assert.equal(state.step, "paid");
+});
+
+test("BACK does nothing from a payment screen", () => {
+  // The money either moved or it did not. A back arrow that appears to undo it
+  // is the most expensive lie on the screen.
+  const state = reduce(initialState, {
+    type: "HOLD_CREATED",
+    hold: { ...HOLD, payment: payment() },
+  });
+
+  assert.equal(reduce(state, { type: "BACK" }).step, "pushed");
+});
+
+test("the countdown says it is still checking rather than claiming to have expired", () => {
+  // CLAUDE.md §10, invariant 3, applied to the grace window.
+  const waiting = reduce(initialState, {
+    type: "HOLD_CREATED",
+    hold: { ...HOLD, payment: payment() },
+  });
+  assert.equal(countdownLabel(waiting, 95), "1:35");
+  assert.equal(countdownLabel(waiting, 0), "Still checking with M-Pesa");
+
+  const nothingPending = reduce(initialState, { type: "HOLD_CREATED", hold: HOLD });
+  assert.equal(countdownLabel(nothingPending, 0), "0:00");
+});
+
+test("a hold whose timer has run out but whose push is live is still held", () => {
+  const waiting = reduce(initialState, {
+    type: "HOLD_CREATED",
+    hold: { ...HOLD, payment: payment() },
+  });
+  const past = Date.parse("2026-09-09T06:09:00Z");
+
+  assert.equal(isHoldExpired(waiting, past), true);
+  assert.equal(slotIsStillHeld(waiting, past), true);
+});
+
+test("resend is offered while there is time left, and never once the money landed", () => {
+  const waiting = reduce(initialState, {
+    type: "HOLD_CREATED",
+    hold: { ...HOLD, payment: payment() },
+  });
+  assert.equal(canResend(waiting, 90), true);
+  assert.equal(canResend(waiting, 0), false);
+
+  const paid = payment({ state: "succeeded", push_outstanding: false, mpesa_receipt: "SJ1" });
+  const done = reduce(initialState, {
+    type: "HOLD_CREATED",
+    hold: { ...HOLD, status: "confirmed", payment: paid },
+  });
+  assert.equal(canResend(done, 90), false);
+});
+
+test("the payment steps are not in ORDER, so the header cannot count them", () => {
+  // A client on the STK screen is not on step five of four.
+  for (const step of PAYMENT_STEPS) {
+    assert.equal(ORDER.includes(step), false, step);
+    assert.equal(isPaymentStep(step), true, step);
+  }
 });

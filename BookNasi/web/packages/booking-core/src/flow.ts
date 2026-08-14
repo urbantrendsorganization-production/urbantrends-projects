@@ -153,7 +153,9 @@ export function createBookingFlow({ transport, slug, now, requestId }: FlowOptio
     },
 
     /**
-     * The confirm step. Creates the hold; slice 6 adds the STK push after it.
+     * The confirm step. Creates the hold, and the server fires the STK push as
+     * part of the same call — one round trip, because the client is on 3G and
+     * a second one is a second chance to fail between "held" and "paying".
      *
      * The request id is minted once per confirm attempt and kept, so a client
      * on 3G who taps twice gets one hold rather than a second that collides
@@ -176,13 +178,30 @@ export function createBookingFlow({ transport, slug, now, requestId }: FlowOptio
       return hold;
     },
 
-    /** Poll while the countdown runs. Slice 6 turns this into the STK screen's
-     *  wait; here it is what notices the server released the slot. */
+    /**
+     * Poll while the countdown runs. This is the STK screen's whole mechanism.
+     *
+     * The client is looking at a screen that has to rewrite itself when money
+     * they moved on a different app arrives at a server they cannot see. There
+     * is no push channel and there is not going to be one in this slice, so the
+     * screen asks.
+     *
+     * The `cancelled` branch is narrower than it looks. A hold that was
+     * cancelled **with a payment still outstanding** is not sent back to the
+     * slot picker: the server holds the slot through a grace window, a late
+     * callback can still confirm it, and dropping the client back to "pick a
+     * time" while their money is in flight is how they book twice.
+     */
     async refreshHold() {
       if (!state.hold) return null;
       try {
         const hold = await transport.getHold(state.hold.id);
-        if (hold.status === "cancelled") {
+        // `!push_outstanding`, not `!payment`. The comment above says "with a
+        // payment still outstanding" and the guard said "with any payment at
+        // all" — so a hold whose push was definitively refused, or that the
+        // client cancelled on their phone, never returned them to the slot
+        // picker when the server released it. They sat on a dead screen.
+        if (hold.status === "cancelled" && !hold.payment?.push_outstanding) {
           emit({ type: "HOLD_RELEASED" });
           confirmRequestId = null;
           return hold;
@@ -196,6 +215,26 @@ export function createBookingFlow({ transport, slug, now, requestId }: FlowOptio
         emit({ type: "FAILED", error: classify(error) });
         return null;
       }
+    },
+
+    /**
+     * Ask for the prompt again. Screen 5's "Resend", screen 7's "Try again".
+     *
+     * Bounded by the **server** — rate, count, and a ceiling derived from the
+     * hold's expiry that nothing can extend. This does not attempt to
+     * pre-empt any of that: a client whose network dropped the first refusal
+     * must get the same answer from the same authority, and a client-side
+     * counter would drift from the one that actually decides.
+     *
+     * A 429 comes back as `too_many_holds` with `retryAfter`, which is the
+     * classification the flow already has for "wait, then it will work".
+     */
+    async resend() {
+      if (!state.hold) return null;
+      const id = state.hold.id;
+      const hold = await guarded(() => transport.resendPush(id));
+      if (hold) emit({ type: "HOLD_UPDATED", hold });
+      return hold;
     },
 
     async release() {

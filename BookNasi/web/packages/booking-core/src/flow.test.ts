@@ -11,7 +11,7 @@ import { test } from "node:test";
 
 import { createBookingFlow } from "./flow";
 import { TransportError, type Transport } from "./transport";
-import type { Availability, Hold, Service, Shop, StaffOption } from "./types";
+import type { Availability, Hold, PaymentView, Service, Shop, StaffOption } from "./types";
 import { ANYONE } from "./types";
 
 const SHOP: Shop = {
@@ -73,7 +73,25 @@ const HOLD: Hold = {
   price_kes: 3500,
   deposit_kes: 875,
   balance_kes: 2625,
+  // Slice 6. Null until a push has been attempted — the moment between the
+  // hold existing and the prompt being accepted is real and short.
+  payment: null,
+  shop_phone: "+254712000111",
 };
+
+/** A live prompt: accepted by Safaricom, no verdict yet. */
+function pushed(over: Partial<PaymentView> = {}): PaymentView {
+  return {
+    state: "pushed",
+    amount_kes: 875,
+    support_code: "BK-4F7K2Q",
+    mpesa_receipt: "",
+    push_outstanding: true,
+    message: "",
+    slot_lost: false,
+    ...over,
+  };
+}
 
 /**
  * Records every call, including overridden ones.
@@ -93,6 +111,7 @@ function fakeTransport(overrides: Partial<Transport> = {}) {
     createHold: async () => HOLD,
     getHold: async () => HOLD,
     releaseHold: async () => ({ ...HOLD, status: "cancelled" }),
+    resendPush: async () => ({ ...HOLD, payment: pushed() }),
   };
   const merged = { ...base, ...overrides } as Record<string, (...args: any[]) => Promise<any>>;
   const recorded: Record<string, (...args: any[]) => Promise<any>> = {};
@@ -291,4 +310,127 @@ test("the store never computes availability for itself", async () => {
 
   assert.deepEqual(flow.getState().availability!.any_staff, []);
   assert.ok(calls.some((c) => c.name === "getAvailability"));
+});
+
+// ------------------------------------------------------ the payment, slice 6
+
+test("the poll is what rewrites the screen when the money lands", async () => {
+  // There is no push channel and there is not going to be one in this slice.
+  // The client moved money in a different app; this is how the page finds out.
+  const paid = {
+    ...HOLD,
+    status: "confirmed",
+    payment: pushed({
+      state: "succeeded",
+      push_outstanding: false,
+      mpesa_receipt: "SJ42K19XQ7",
+    }),
+  };
+  const { flow } = makeFlow({
+    createHold: async () => ({ ...HOLD, payment: pushed() }),
+    getHold: async () => paid,
+  });
+  await flow.load();
+  await flow.chooseService(BRAIDS);
+  await flow.chooseDate("2026-09-09");
+  flow.chooseSlot(AVAILABILITY.any_staff[0]);
+  flow.setPhone("0712345678");
+  await flow.confirm();
+  assert.equal(flow.getState().step, "pushed");
+
+  await flow.refreshHold();
+
+  assert.equal(flow.getState().step, "paid");
+  assert.equal(flow.getState().hold?.payment?.mpesa_receipt, "SJ42K19XQ7");
+});
+
+test("a cancelled hold with a payment still outstanding is NOT sent back to the picker", async () => {
+  // The server holds the slot through a grace window and a late callback can
+  // still confirm it. Dropping the client back to "pick a time" while their
+  // money is in flight is how they end up booking twice.
+  const { flow } = makeFlow({
+    createHold: async () => ({ ...HOLD, payment: pushed() }),
+    getHold: async () => ({ ...HOLD, status: "cancelled", payment: pushed() }),
+  });
+  await flow.load();
+  await flow.chooseService(BRAIDS);
+  await flow.chooseDate("2026-09-09");
+  flow.chooseSlot(AVAILABILITY.any_staff[0]);
+  flow.setPhone("0712345678");
+  await flow.confirm();
+
+  await flow.refreshHold();
+
+  assert.notEqual(flow.getState().step, "slot");
+  assert.equal(flow.getState().step, "pushed");
+  assert.notEqual(flow.getState().hold, null);
+});
+
+test("a cancelled hold with no payment at all does go back to the picker", async () => {
+  const { flow } = makeFlow({
+    getHold: async () => ({ ...HOLD, status: "cancelled", payment: null }),
+  });
+  await flow.load();
+  await flow.chooseService(BRAIDS);
+  await flow.chooseDate("2026-09-09");
+  flow.chooseSlot(AVAILABILITY.any_staff[0]);
+  flow.setPhone("0712345678");
+  await flow.confirm();
+
+  await flow.refreshHold();
+
+  assert.equal(flow.getState().step, "slot");
+  assert.equal(flow.getState().hold, null);
+});
+
+test("resend asks the server and takes the hold it answers with", async () => {
+  const { flow, calls } = makeFlow({
+    createHold: async () => ({ ...HOLD, payment: pushed() }),
+    resendPush: async () => ({ ...HOLD, payment: pushed({ support_code: "BK-SECOND" }) }),
+  });
+  await flow.load();
+  await flow.chooseService(BRAIDS);
+  await flow.chooseDate("2026-09-09");
+  flow.chooseSlot(AVAILABILITY.any_staff[0]);
+  flow.setPhone("0712345678");
+  await flow.confirm();
+
+  await flow.resend();
+
+  assert.ok(calls.some((c) => c.name === "resendPush"));
+  assert.equal(flow.getState().hold?.payment?.support_code, "BK-SECOND");
+});
+
+test("a refused resend comes back with how long to wait, and changes nothing else", async () => {
+  // The server owns the rate, the count and the grace ceiling. A client-side
+  // counter would drift from the one that actually decides.
+  const { flow } = makeFlow({
+    createHold: async () => ({ ...HOLD, payment: pushed() }),
+    resendPush: async () => {
+      throw new TransportError(429, { detail: "Give it 20 more seconds.", retry_after: 20 });
+    },
+  });
+  await flow.load();
+  await flow.chooseService(BRAIDS);
+  await flow.chooseDate("2026-09-09");
+  flow.chooseSlot(AVAILABILITY.any_staff[0]);
+  flow.setPhone("0712345678");
+  await flow.confirm();
+
+  await flow.resend();
+
+  const state = flow.getState();
+  assert.equal(state.error?.kind, "too_many_holds");
+  assert.equal(state.error?.retryAfter, 20);
+  // Still on screen 5 with the original prompt. A refusal to send a *second*
+  // prompt is not a failure of the first one.
+  assert.equal(state.step, "pushed");
+  assert.equal(state.hold?.payment?.support_code, "BK-4F7K2Q");
+});
+
+test("resend is not attempted at all when there is no hold", async () => {
+  const { flow, calls } = makeFlow();
+
+  assert.equal(await flow.resend(), null);
+  assert.ok(!calls.some((c) => c.name === "resendPush"));
 });
