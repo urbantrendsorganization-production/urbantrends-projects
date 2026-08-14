@@ -51,6 +51,24 @@ class DarajaUnavailable(Exception):
     """
 
 
+#: The two STK transaction types. Mirrored from `config.settings.base` rather
+#: than imported, so this module stays importable without Django settings for
+#: the same reason the rest of it avoids them where it can.
+PAYBILL = "CustomerPayBillOnline"
+TILL = "CustomerBuyGoodsOnline"
+
+
+class DarajaMisconfigured(Exception):
+    """Our configuration is wrong, not Safaricom's answer.
+
+    Deliberately **not** a `DarajaUnavailable`: that one means "we cannot tell
+    whether the prompt went out" and is retried by the reconciliation query.
+    This means no push was attempted and none should be, because attempting it
+    would send a client's deposit somewhere the shop is not looking. Retrying it
+    on a schedule would just be wrong on a schedule.
+    """
+
+
 class DarajaRejected(Exception):
     """Safaricom answered and said no. No prompt was sent, no money will move."""
 
@@ -102,6 +120,43 @@ class DarajaClient:
         self.config = config or settings.MPESA
         self._token = None
         self._token_expires = 0.0
+
+    # ------------------------------------------------------- paybill or till
+
+    @property
+    def transaction_type(self):
+        """`CustomerPayBillOnline` or `CustomerBuyGoodsOnline`.
+
+        Validated here rather than trusted, because the value goes straight into
+        the push body and a third string is a rejection from Safaricom carrying
+        an error code the client never sees the inside of.
+        """
+        configured = (self.config.get("TRANSACTION_TYPE") or PAYBILL).strip()
+        if configured not in (PAYBILL, TILL):
+            raise DarajaMisconfigured(
+                f"MPESA_TRANSACTION_TYPE must be {PAYBILL} or {TILL}, got {configured!r}"
+            )
+        return configured
+
+    @property
+    def party_b(self):
+        """Whose account the money lands in.
+
+        For a till this is the till number and **not** `BusinessShortCode`.
+        Sending the store number as `PartyB` on a BuyGoods push is the failure
+        worth being loud about: Safaricom may well accept it, the client's PIN
+        prompt appears, the money moves, and it does not arrive where the shop
+        is looking for it. A missing till number is therefore a refusal to push
+        rather than a fallback to the shortcode.
+        """
+        if self.transaction_type == PAYBILL:
+            return self.config["SHORTCODE"]
+        till = (self.config.get("TILL_NUMBER") or "").strip()
+        if not till:
+            raise DarajaMisconfigured(
+                f"MPESA_TILL_NUMBER is required when MPESA_TRANSACTION_TYPE is {TILL}"
+            )
+        return till
 
     # ---------------------------------------------------------------- http
 
@@ -165,13 +220,20 @@ class DarajaClient:
         shortcode = self.config["SHORTCODE"]
         msisdn = phone.lstrip("+")
         body = {
+            # Always the store / head office number, in both modes, because it
+            # is what the password is derived from. For a till this is *not* the
+            # till number.
             "BusinessShortCode": shortcode,
             "Password": _password(shortcode, self.config["PASSKEY"], stamp),
             "Timestamp": stamp,
-            "TransactionType": "CustomerPayBillOnline",
+            "TransactionType": self.transaction_type,
             "Amount": int(amount),
             "PartyA": msisdn,
-            "PartyB": shortcode,
+            # The one field that differs between the two modes, and the one that
+            # decides whose account the deposit lands in. Paybill: the paybill
+            # number. Till: the till number, which is a different number from
+            # `BusinessShortCode` above.
+            "PartyB": self.party_b,
             "PhoneNumber": msisdn,
             "CallBackURL": self.config["CALLBACK_URL"],
             # Daraja truncates both silently. Doing it here means the reference

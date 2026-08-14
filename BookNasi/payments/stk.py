@@ -39,7 +39,12 @@ from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
-from payments.daraja import DarajaRejected, DarajaUnavailable, get_client
+from payments.daraja import (
+    DarajaMisconfigured,
+    DarajaRejected,
+    DarajaUnavailable,
+    get_client,
+)
 from payments.machine import apply_payment_transition, awaiting_result_for, open_payment_for
 from payments.models import OPEN_PAYMENT_CONSTRAINT, Payment
 from payments.settlement import supersede
@@ -132,6 +137,23 @@ def _send(payment, appointment, *, now):
             # product a human can read out loud.
             reference=payment.support_code,
             description=f"Deposit · {appointment.shop.name}",
+        )
+    except DarajaMisconfigured as exc:
+        # Our problem, not Safaricom's. No prompt was sent, and — unlike
+        # `DarajaUnavailable` — none should be retried, because the retry would
+        # be wrong in the same way. `PUSH_FAILED` rather than `UNKNOWN` keeps it
+        # out of the reconciliation sweep, which exists for money that may have
+        # moved; nothing moved here.
+        #
+        # ERROR, not WARNING: a till deployment missing its till number would
+        # otherwise fail one booking at a time, quietly, and the shop would find
+        # out from a client who never got a prompt.
+        logger.error("stk push misconfigured for %s: %s", payment.support_code, exc)
+        return apply_payment_transition(
+            payment,
+            PaymentState.PUSH_FAILED,
+            now=now,
+            result_desc=str(exc)[:255],
         )
     except DarajaRejected as exc:
         # An answer. No prompt was sent and no money will move.

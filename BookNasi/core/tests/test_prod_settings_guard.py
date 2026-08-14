@@ -25,6 +25,8 @@ import pytest
 
 from config.env import MissingSetting
 
+#: Placeholders only. Nothing here is a credential — CLAUDE.md §5 and §11 — and
+#: a test that needed a real one would be a test that could not run in CI.
 REQUIRED = {
     "DJANGO_SECRET_KEY": "not-the-real-one",
     "DATABASE_URL": "postgres://u:p@localhost:5432/booknasi",
@@ -32,16 +34,31 @@ REQUIRED = {
     "MPESA_CALLBACK_TOKEN": "a-real-token",
     "MPESA_CLIENT": "payments.daraja.DarajaClient",
     "MESSAGE_PROVIDER": "notifications.providers.SmsProvider",
+    "MPESA_CONSUMER_KEY": "placeholder-key",
+    "MPESA_CONSUMER_SECRET": "placeholder-secret",
+    "MPESA_SHORTCODE": "000000",
+    "MPESA_PASSKEY": "placeholder-passkey",
+    "MPESA_CALLBACK_URL": "https://booknasi.co.ke/api/mpesa/tok/",
+    "MPESA_TRANSACTION_TYPE": "CustomerPayBillOnline",
+    "MPESA_TILL_NUMBER": "",
 }
 
 
 def _load_prod(monkeypatch, **overrides):
-    """Import `config.settings.prod` under a given environment."""
+    """Import `config.settings.prod` under a given environment.
+
+    **`base` is reloaded first, and that is not incidental.** `MPESA` is a dict
+    built at import time, so reloading only `prod` re-runs its `from .base
+    import *` against a module object that still holds the values from whenever
+    it was first imported — and every assertion below would then be checking a
+    stale dict while appearing to pass.
+    """
     for key, value in {**REQUIRED, **overrides}.items():
         if value is None:
             monkeypatch.delenv(key, raising=False)
         else:
             monkeypatch.setenv(key, value)
+    importlib.reload(importlib.import_module("config.settings.base"))
     module = importlib.import_module("config.settings.prod")
     return importlib.reload(module)
 
@@ -91,3 +108,57 @@ class TestTheSecretsAreRequired:
 
         with pytest.raises(MissingSetting):
             _load_prod(monkeypatch, MPESA_CALLBACK_TOKEN="")
+
+
+class TestPaybillAndTill:
+    """The two STK modes, and the one that has a second required setting.
+
+    A till deployment sending the *store* number as `PartyB` is the failure this
+    guards: Safaricom may accept it, the prompt appears, the client pays, and
+    the money does not arrive where the shop is looking. `daraja.py` refuses the
+    push; this refuses the deploy, which is the cheaper of the two.
+    """
+
+    def test_paybill_needs_no_till_number(self, monkeypatch):
+        prod = _load_prod(monkeypatch, MPESA_TRANSACTION_TYPE="CustomerPayBillOnline")
+
+        assert prod.MPESA["TRANSACTION_TYPE"] == "CustomerPayBillOnline"
+
+    def test_till_without_a_till_number_stops_the_deploy(self, monkeypatch):
+        with pytest.raises(MissingSetting) as exc:
+            _load_prod(
+                monkeypatch,
+                MPESA_TRANSACTION_TYPE="CustomerBuyGoodsOnline",
+                MPESA_TILL_NUMBER="",
+            )
+
+        assert "MPESA_TILL_NUMBER" in str(exc.value)
+
+    def test_till_with_one_is_allowed(self, monkeypatch):
+        prod = _load_prod(
+            monkeypatch,
+            MPESA_TRANSACTION_TYPE="CustomerBuyGoodsOnline",
+            MPESA_TILL_NUMBER="000111",
+        )
+
+        assert prod.MPESA["TILL_NUMBER"] == "000111"
+
+    def test_a_third_transaction_type_is_refused(self, monkeypatch):
+        """There are two. A typo here is a rejection at Safaricom carrying an
+        error code the client never sees the inside of."""
+        with pytest.raises(MissingSetting) as exc:
+            _load_prod(monkeypatch, MPESA_TRANSACTION_TYPE="CustomerBuyGoods")
+
+        assert "MPESA_TRANSACTION_TYPE" in str(exc.value)
+
+    @pytest.mark.parametrize(
+        "name",
+        ["MPESA_CONSUMER_KEY", "MPESA_CONSUMER_SECRET", "MPESA_SHORTCODE", "MPESA_PASSKEY"],
+    )
+    def test_every_credential_is_required(self, monkeypatch, name):
+        """`base.py` defaults each to "" so local work needs no M-Pesa account.
+        Production without them is a shop that cannot take a deposit."""
+        with pytest.raises(MissingSetting) as exc:
+            _load_prod(monkeypatch, **{name: ""})
+
+        assert name.replace("MPESA_", "") in str(exc.value)

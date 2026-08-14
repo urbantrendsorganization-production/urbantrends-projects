@@ -145,11 +145,11 @@ REST_FRAMEWORK = {
     # carrier-grade NAT, so a per-IP limit tight enough to stop a determined
     # script would block a neighbourhood on a Saturday morning. The per-phone
     # limits in that module are what actually bound the exposure.
-    # One scope per public endpoint, never a shared budget. The rule and the two
-    # slices that taught it to us are in `scheduling/abuse.py`; the short version
-    # is that under carrier-grade NAT a shared scope lets one client's traffic
-    # exhaust the allowance of every stranger on their operator's NAT pool, and
-    # the 429 surfaces on whichever endpoint they touch next.
+    #
+    # One scope per public endpoint, never a shared budget — same note, same
+    # reason. Under CGNAT a shared scope lets one client's traffic exhaust the
+    # allowance of every stranger on their operator's NAT pool, and the 429
+    # surfaces on whichever endpoint they touch next rather than the noisy one.
     "DEFAULT_THROTTLE_RATES": {
         # The reads, split by how hard each is actually used. Availability is
         # re-fetched on every date and stylist change; the shop, service and
@@ -169,6 +169,19 @@ REST_FRAMEWORK = {
         # `HoldReleaseView` — so the button a client is *meant* to press must
         # not be rate-limited by how many holds they have taken.
         "hold-release": "30/hour",
+        # Slice 7's manage surface, split read from write. The read backs a page
+        # a client may leave open; the writes are once-per-booking actions. One
+        # budget for both would let a forgotten tab spend a client's ability to
+        # cancel, which is the action they are least able to postpone.
+        "manage-read": "300/hour",
+        # One scope per action, not one "write" bucket. A client who has just
+        # rescheduled twice must still be able to cancel, and a client whose
+        # slot was lost must still be able to re-point — those are three
+        # different needs and a shared budget makes the busiest one starve the
+        # other two at exactly the wrong moment.
+        "manage-cancel": "10/hour",
+        "manage-reschedule": "20/hour",
+        "payment-repoint": "20/hour",
         # Resend is bounded per appointment in `payments/stk.py`, which is the
         # real control. This is the same crude per-IP ceiling as above, and is
         # loose for the same carrier-grade-NAT reason.
@@ -191,14 +204,32 @@ PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", "http://localhost:3000")
 
 # Safaricom Daraja. Nothing real here and nothing real in `.env.example` —
 # CLAUDE.md §5 and §11. A sandbox shortcode is still a credential.
+#: The two STK transaction types Daraja offers, and the only two that exist.
+#: Named rather than free text because the string goes straight into the push
+#: body, and a typo there is a rejection at Safaricom with a code nobody reads.
+MPESA_PAYBILL = "CustomerPayBillOnline"
+MPESA_TILL = "CustomerBuyGoodsOnline"
+
 MPESA = {
     "BASE_URL": env("MPESA_BASE_URL", "https://sandbox.safaricom.co.ke"),
     "CONSUMER_KEY": env("MPESA_CONSUMER_KEY", ""),
     "CONSUMER_SECRET": env("MPESA_CONSUMER_SECRET", ""),
+    # Paybill: the paybill number. Till: the **store / head office** number,
+    # which is *not* the till number. The password is derived from this one in
+    # both cases, which is why the two are separate settings rather than one
+    # "shortcode" that means different things depending on the mode.
     "SHORTCODE": env("MPESA_SHORTCODE", ""),
     "PASSKEY": env("MPESA_PASSKEY", ""),
     "CALLBACK_URL": env("MPESA_CALLBACK_URL", ""),
     "TIMEOUT_SECONDS": int(env("MPESA_TIMEOUT_SECONDS", "20")),
+    # Paybill by default. A till deployment sets both of these; a paybill one
+    # sets neither, and the default keeps every existing deployment working.
+    "TRANSACTION_TYPE": env("MPESA_TRANSACTION_TYPE", MPESA_PAYBILL),
+    # Where the money actually lands under `CustomerBuyGoodsOnline`. Unused for
+    # paybill, and `daraja.py` refuses to push without it when the type says
+    # till — a `PartyB` of the store number would send the client's deposit to
+    # the wrong place, quietly and successfully.
+    "TILL_NUMBER": env("MPESA_TILL_NUMBER", ""),
 }
 # The real client is opt-in. Local work and every test run against
 # `FakeDarajaClient`, which implements the same two methods — the seam is at the

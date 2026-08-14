@@ -44,6 +44,30 @@ for _name, _value in (
             "be selected under production settings."
         )
 
+# A till deployment must carry its till number. Without it `daraja.py` refuses
+# every push — correctly, because `PartyB` would otherwise be the store number
+# and the client's deposit would land somewhere the shop is not looking — but it
+# refuses one booking at a time, at the moment a client is being asked for
+# money. Failing at boot instead turns a slow bleed into a deploy that does not
+# start. See `payments/daraja.py`.
+if MPESA["TRANSACTION_TYPE"] == MPESA_TILL and not MPESA["TILL_NUMBER"]:  # noqa: F405
+    raise MissingSetting(
+        f"MPESA_TILL_NUMBER must be set when MPESA_TRANSACTION_TYPE is {MPESA_TILL}"  # noqa: F405
+    )
+
+if MPESA["TRANSACTION_TYPE"] not in (MPESA_PAYBILL, MPESA_TILL):  # noqa: F405
+    raise MissingSetting(
+        f"MPESA_TRANSACTION_TYPE must be {MPESA_PAYBILL} or {MPESA_TILL}, "  # noqa: F405
+        f"got {MPESA['TRANSACTION_TYPE']!r}"  # noqa: F405
+    )
+
+# The credentials themselves. `base.py` defaults each to "" so local work needs
+# no M-Pesa account at all; production without them is a shop that cannot take
+# a deposit, which is the product.
+for _key in ("CONSUMER_KEY", "CONSUMER_SECRET", "SHORTCODE", "PASSKEY", "CALLBACK_URL"):
+    if not MPESA[_key]:  # noqa: F405
+        raise MissingSetting(f"MPESA_{_key} must be set in the environment")
+
 # Caddy terminates TLS and proxies to a container bound to 127.0.0.1.
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_HSTS_SECONDS = 31536000
