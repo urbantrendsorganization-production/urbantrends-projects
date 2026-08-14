@@ -49,6 +49,13 @@ class Template(models.TextChoices):
     BOOKING_CONFIRMED = "booking_confirmed", "Booking confirmed"
     HOLD_RELEASED = "hold_released", "Hold released"
     SLOT_LOST = "slot_lost", "Paid but the slot was taken"
+    # Slice 7, the lifecycle. Three cancellations rather than one, because the
+    # only thing a client does not already know when they cancel is what
+    # happened to their money — see CLAUDE.md §12.
+    CANCELLED_REFUND = "cancelled_refund", "Cancelled, deposit refunded"
+    CANCELLED_CREDIT = "cancelled_credit", "Cancelled, deposit became credit"
+    CANCELLED_PLAIN = "cancelled_plain", "Cancelled, nothing had been taken"
+    RESCHEDULED = "rescheduled", "Booking moved"
 
 
 #: Sent at most once per appointment. Enforced by a unique constraint on
@@ -60,7 +67,19 @@ class Template(models.TextChoices):
 #: baked into a migration's constraint condition, and `str` hashing is
 #: randomised per process, so a set would serialise in a different order on
 #: every run and `makemigrations --check` would report a phantom change.
-ONE_SHOT = (Template.BOOKING_CONFIRMED, Template.HOLD_RELEASED, Template.SLOT_LOST)
+#:
+#: The cancellations are one-shot; `RESCHEDULED` deliberately is not. A booking
+#: can be moved up to `MAX_RESCHEDULES` times and each move is a different time
+#: the client has to be told about — a once-per-appointment constraint here
+#: would silently drop the second one.
+ONE_SHOT = (
+    Template.BOOKING_CONFIRMED,
+    Template.HOLD_RELEASED,
+    Template.SLOT_LOST,
+    Template.CANCELLED_REFUND,
+    Template.CANCELLED_CREDIT,
+    Template.CANCELLED_PLAIN,
+)
 
 
 def _confirmed(v):
@@ -90,10 +109,49 @@ def _slot_lost(v):
     )
 
 
+def _cancelled_refund(v):
+    return (
+        f"Cancelled: {v['when']} with {v['staff']} at {v['shop']}. "
+        f"Your KES {v['paid']} deposit will be refunded by the shop. "
+        f"Any questions, {v['shop_phone']}."
+    )
+
+
+def _cancelled_credit(v):
+    # The figure, the expiry date and the reference, because this is the only
+    # record the client gets of money they still have. A message that said
+    # "your deposit has become credit" without saying how much, until when, or
+    # what to quote is the support call §12 was trying to prevent.
+    return (
+        f"Cancelled: {v['when']} with {v['staff']} at {v['shop']}. "
+        f"Your KES {v['paid']} deposit is now credit at {v['shop']}, valid until "
+        f"{v['credit_expires']} on any service. Quote {v['credit_reference']}. "
+        f"{v['link']}"
+    )
+
+
+def _cancelled_plain(v):
+    return (
+        f"Cancelled: {v['when']} with {v['staff']} at {v['shop']}. "
+        f"Nothing was taken from your M-Pesa."
+    )
+
+
+def _rescheduled(v):
+    return (
+        f"Moved: your booking at {v['shop']} is now {v['when']} with {v['staff']}. "
+        f"{v['service']}. Your deposit moved with it. {v['link']}"
+    )
+
+
 RENDERERS = {
     Template.BOOKING_CONFIRMED: _confirmed,
     Template.HOLD_RELEASED: _released,
     Template.SLOT_LOST: _slot_lost,
+    Template.CANCELLED_REFUND: _cancelled_refund,
+    Template.CANCELLED_CREDIT: _cancelled_credit,
+    Template.CANCELLED_PLAIN: _cancelled_plain,
+    Template.RESCHEDULED: _rescheduled,
 }
 
 

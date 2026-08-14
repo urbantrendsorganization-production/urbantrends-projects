@@ -285,3 +285,114 @@ class PublicStaffSerializer(serializers.Serializer):
 
     class Meta:
         model = Staff
+
+
+class ManageViewSerializer(serializers.Serializer):
+    """What the manage page renders. Slice 7.
+
+    Wider than `PublicHoldSerializer` because this page can act, and a button
+    whose consequence is not on screen is worse than no button — CLAUDE.md §5
+    requires the terms to be readable before money moves, and on the cancel
+    screen the term that matters is the *figure*.
+
+    `actions` is computed by `scheduling/lifecycle.actions_for`, the same
+    function the cancel endpoint applies, so the screen and the write cannot
+    disagree about what a client is owed.
+
+    Still narrow on identity. This is unauthenticated, keyed by a token that
+    reached one phone: no client name, no other bookings, nothing about the
+    shop's day.
+    """
+
+    id = serializers.UUIDField(read_only=True)
+    status = serializers.CharField(read_only=True)
+    starts_at = serializers.DateTimeField(read_only=True)
+    ends_at = serializers.DateTimeField(read_only=True)
+    local_time = serializers.SerializerMethodField()
+    local_date = serializers.SerializerMethodField()
+    staff_name = serializers.SerializerMethodField()
+    staff_id = serializers.SerializerMethodField()
+    service_name = serializers.SerializerMethodField()
+    service_id = serializers.SerializerMethodField()
+    price_kes = serializers.IntegerField(source="price_snapshot", read_only=True)
+    deposit_kes = serializers.IntegerField(source="deposit_snapshot", read_only=True)
+    balance_kes = serializers.SerializerMethodField()
+    paid_kes = serializers.SerializerMethodField()
+    shop_name = serializers.SerializerMethodField()
+    shop_slug = serializers.SerializerMethodField()
+    shop_phone = serializers.SerializerMethodField()
+    refund_window_hours = serializers.SerializerMethodField()
+    deposit_credit_days = serializers.SerializerMethodField()
+    actions = serializers.SerializerMethodField()
+    credit = serializers.SerializerMethodField()
+
+    def get_local_time(self, appointment):
+        from scheduling.availability import LOCAL_TZ
+
+        return appointment.starts_at.astimezone(LOCAL_TZ).strftime("%H:%M")
+
+    def get_local_date(self, appointment):
+        from scheduling.availability import LOCAL_TZ
+
+        return appointment.starts_at.astimezone(LOCAL_TZ).strftime("%Y-%m-%d")
+
+    def get_staff_name(self, appointment):
+        return appointment.staff.display_name
+
+    def get_staff_id(self, appointment):
+        return str(appointment.staff_id)
+
+    def get_service_name(self, appointment):
+        return appointment.service.name
+
+    def get_service_id(self, appointment):
+        return str(appointment.service_id)
+
+    def get_balance_kes(self, appointment):
+        return max(appointment.price_snapshot - appointment.deposit_snapshot, 0)
+
+    def get_paid_kes(self, appointment):
+        from scheduling.lifecycle import paid_deposit_for
+
+        return paid_deposit_for(appointment)
+
+    def get_shop_name(self, appointment):
+        return appointment.shop.name
+
+    def get_shop_slug(self, appointment):
+        return appointment.shop.slug
+
+    def get_shop_phone(self, appointment):
+        return appointment.shop.phone or ""
+
+    def get_refund_window_hours(self, appointment):
+        return appointment.shop.refund_window_hours
+
+    def get_deposit_credit_days(self, appointment):
+        return appointment.shop.deposit_credit_days
+
+    def get_actions(self, appointment):
+        from scheduling.lifecycle import actions_for
+
+        return actions_for(appointment)
+
+    def get_credit(self, appointment):
+        """Spendable credit this client holds at this shop, if any.
+
+        On the manage page because it is the page a client opens after a late
+        cancellation, and "you have KES 875 until 13 October" is the whole
+        reason credit is not a forfeit.
+        """
+        from payments.credit import balance_for, spendable_for
+
+        if appointment.client_id is None:
+            return None
+        balance = balance_for(appointment.client, appointment.shop)
+        if balance < 1:
+            return None
+        soonest = spendable_for(appointment.client, appointment.shop).first()
+        return {
+            "balance_kes": balance,
+            "expires_at": soonest.expires_at if soonest else None,
+            "reference": soonest.reference if soonest else "",
+        }

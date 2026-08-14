@@ -113,6 +113,7 @@ function fakeTransport(overrides: Partial<Transport> = {}) {
     getStaff: async () => STAFF,
     getAvailability: async () => AVAILABILITY,
     createHold: async () => HOLD,
+    repointPayment: async () => ({}),
     getHold: async () => HOLD,
     releaseHold: async () => ({ ...HOLD, status: "cancelled" }),
     resendPush: async () => ({ ...HOLD, payment: pushed() }),

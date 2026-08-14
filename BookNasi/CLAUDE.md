@@ -111,6 +111,15 @@ In Kenya walk-ins are the majority. If staff can't record one in **three taps**,
 - **Callbacks must be idempotent.** Safaricom retries. Unique constraint on the checkout request ID; process exactly once. Duplicate processing means double-charging or double-booking.
 - Deposit rules live on the service: flat amount, percentage, or none (a quick shave shouldn't need one). The shop sets the rule; service creation pre-fills **25%**, so charging nothing is a deliberate change rather than the path of least resistance.
 - **A service with no deposit is not publicly bookable in v1.** Staff can book it and it can be recorded as a walk-in, but the public booking page and the public API must both reject it. There is no client account and no OTP — the STK push *is* the phone verification, so a deposit-free public booking is an unverified number holding a slot for free. Enforce this at the API, not only in the UI.
+
+- **The carve-out: a booking backed by an already-succeeded payment needs no new push.** Added at slice 7. Two paths produce a confirmed public booking with no STK prompt of its own, and neither is the thing the rule above forbids:
+
+  1. **A re-pointed payment** — the `slotLost` remedy. The client paid, the callback was slow, the slot went, and they pick another time. The same succeeded payment is carried to the new appointment (`payments/repoint.py`, with a `PaymentMove` row recording the pair).
+  2. **A deposit covered entirely by shop credit** — a late cancellation's credit, spent on a rebooking (`payments/credit.py`).
+
+  The rule exists to stop **unverified numbers** holding slots. In both cases Safaricom already confirmed a payment from that number, and a succeeded payment *is* the verification the deposit rule was standing in for. Satisfying the rule's purpose through the payment it was a proxy for is not a loophole in it.
+
+  What stays true: the money must be real and traceable. A credit is `PROTECT`-linked to the payment it descends from, a re-point requires `PaymentState.SUCCEEDED`, and neither path can be reached with a request alone — each needs a money record only a real M-Pesa success could have produced. A deposit-free *service* is still not publicly bookable, and nothing here relaxes that.
 - The deposit is applied to the final bill, not held separately.
 - Refund/forfeit is a product decision, not a technical one, but the policy must be visible to the client **before** they pay. Otherwise every forfeit becomes a support ticket.
 - Design payment records so a transaction-fee model stays possible later. Don't implement it now.
@@ -154,6 +163,11 @@ Clinics, inventory, POS, payroll/commission, loyalty points, multi-currency, nat
 
 Rescheduling needs the distinction spelled out, because the earlier wording was too broad. **A single client moving their own booking to another free slot is in scope** — it is one write against the availability engine, and the design makes it the primary action on both cancel screens because moving beats cancelling for everyone. What stays out is the *cascade*: shifting a booking that displaces another, negotiating between two clients, or rippling a staff schedule change across a day's appointments. One booking, one move, no knock-on.
 
+Two bounds added when slice 7 built it:
+
+- **Three moves per booking** (`lifecycle.MAX_RESCHEDULES`). Each move invalidates a stylist's planning for a day. A refusal still offers cancel, so nobody is trapped.
+- **Moving never restores refundability.** `entered_refund_window_at` is a one-way latch, stamped the first time a booking is seen inside its shop's refund window and never cleared. Without it the reschedule button is a refund button: sit inside the window where a cancel yields credit, move six weeks out, cancel for cash. Moving *into* the window is allowed and stamps immediately — a client taking a slot three hours away has knowingly taken a tight one. Same service, same stylist; a stylist change only ever falls out of "anyone available".
+
 Clinics are out on purpose: appointment records tied to a medical practice edge into health data under the Kenya Data Protection Act 2019, which is a materially higher compliance burden. Clinics are a later phase with legal review, not a label change.
 
 ---
@@ -192,7 +206,9 @@ Settled 1 August 2026 at the close of design scoping. Implement these; don't re-
 
 **Identity**
 
-- **No client account and no OTP.** The client types a phone number at checkout; the STK push to that number is the verification. Booking management happens through a signed, expiring, single-appointment token delivered by SMS — the link is the session. An account requirement or an OTP step costs bookings at exactly the point where they are most likely to drop. The consequence is the deposit-free rule in §5: without a payment there is no verification, so a deposit-free service cannot be booked publicly.
+- **No client account and no OTP.** The client types a phone number at checkout; the STK push to that number is the verification. Booking management happens through an expiring, single-appointment token delivered by SMS — the link is the session.
+
+  Slice 7 built it as a **stored 128-bit random token**, not the signed payload this line originally said. A signed payload is ~120 URL characters and tips most confirmations into a second SMS segment, and §6 calls messaging cost a real line item — a permanent per-message tax to avoid one indexed column is the wrong trade. Random and signed are equally unforgeable; the stored one is additionally *revocable*, which cancelling needs. Lifetime is anchored to `starts_at + 2h` rather than fixed, so a booking six weeks out has a link that lives six weeks. It survives a reschedule on purpose: the move updates the same row, and breaking the link on the action the client just took would strand them behind a second SMS. See `scheduling/manage_tokens.py`. An account requirement or an OTP step costs bookings at exactly the point where they are most likely to drop. The consequence is the deposit-free rule in §5: without a payment there is no verification, so a deposit-free service cannot be booked publicly.
 - **Per-person staff logins.** `Staff` is a bookable shop-level row linked to a `Membership`. Staff see only their own day. Shared logins would destroy per-staff revenue attribution, which is the owner dashboard's whole argument. A shared shop-device account is a plausible later addition — leave room for it, build nothing for it now.
 - **AuthGate is deferred.** Custom `User` on Django's own auth, phone as `USERNAME_FIELD` (staff invites arrive by SMS and salon staff often have no working email). No new auth dependency. Migrating to AuthGate later is a data move, not a redesign.
 

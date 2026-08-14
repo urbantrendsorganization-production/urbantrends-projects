@@ -167,6 +167,50 @@ class Appointment(OrgDerivedModel):
     #: held slots repeatedly is.
     hold_released_at = models.DateTimeField(null=True, blank=True, editable=False)
 
+    # ------------------------------------------------- slice 7: the lifecycle
+
+    #: The manage link's whole authentication. CLAUDE.md §12: "the link is the
+    #: session" — no account, no OTP, one appointment.
+    #:
+    #: A stored random token rather than a signed payload, decided at slice 7
+    #: planning. 128 bits of `secrets` entropy is as unforgeable as an HMAC and
+    #: about a fifth of the length, which keeps the confirmation SMS inside one
+    #: segment — §6 calls messaging cost a real line item, and a second segment
+    #: on every confirmation is a permanent tax to save one column. It is also
+    #: revocable, which a stateless token is not.
+    #:
+    #: Null on walk-ins: nobody was sent a link, so there is nothing to manage.
+    manage_token = models.CharField(  # noqa: DJ001 — NULL means "no link was issued"
+        max_length=32, null=True, blank=True, unique=True, editable=False
+    )
+    #: Anchored to the appointment, not to the issue date. A booking six weeks
+    #: out needs a link that lives six weeks; one made this morning needs one
+    #: that dies tonight. Set to `starts_at` plus a short tail so a client just
+    #: marked no-show can still open the link and see why, and moved forward by
+    #: a reschedule so the link's life follows the booking.
+    manage_expires_at = models.DateTimeField(null=True, blank=True, editable=False)
+    #: Bumped to kill every outstanding link for this booking. Cancelling does
+    #: it: the SMS is still in the client's inbox and the row is no longer
+    #: theirs to act on, and relying on status checks alone means every future
+    #: endpoint has to remember to make one.
+    token_version = models.PositiveIntegerField(default=1, editable=False)
+
+    #: The one-way latch behind the refund policy, and the reason a client
+    #: cannot reschedule their way out of a forfeit.
+    #:
+    #: Stamped the first time this booking is observed inside its shop's refund
+    #: window. Never cleared. Without it the dodge is: sit inside the window
+    #: where a cancel yields credit, move the booking six weeks out so it is
+    #: outside the window, then cancel for a full refund. With it, refundability
+    #: is decided by whether the booking has *ever* been late, not by where it
+    #: happens to sit at the moment somebody presses cancel.
+    entered_refund_window_at = models.DateTimeField(null=True, blank=True, editable=False)
+    #: Bounded by `MAX_RESCHEDULES`. Every move invalidates a stylist's planning
+    #: for a day; three is generous for real changes and stops a booking being
+    #: walked around the calendar. Refusal still offers cancel, which now yields
+    #: credit rather than nothing.
+    reschedule_count = models.PositiveSmallIntegerField(default=0, editable=False)
+
     class Meta:
         db_table = "appointments"
         ordering = ["time_range"]

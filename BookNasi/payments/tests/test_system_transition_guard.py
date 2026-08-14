@@ -47,7 +47,27 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 #: where "the money arrived" becomes "the booking is confirmed"; the transitions
 #: module is where the enum lives. Anything else — a view, a serializer, a
 #: management command — is the hole this guard exists to keep shut.
-ALLOWED_TO_ACT_AS_SYSTEM = {"payments/settlement.py", "scheduling/transitions.py"}
+#:
+#: Slice 7 adds two, and the test for both is the same question this guard has
+#: always asked: **is there real money behind this confirmation?**
+#:
+#: - `payments/repoint.py` confirms a booking against a payment Safaricom
+#:   already told us succeeded. It is the same money as the original push,
+#:   moved to a different slot, with a `PaymentMove` row recording the pair.
+#: - `scheduling/holds.py` confirms a booking whose deposit was met entirely by
+#:   shop credit. That credit descends from a succeeded payment via a
+#:   `PROTECT`ed FK, which is CLAUDE.md §5's carve-out and the reason it is not
+#:   a deposit-free booking.
+#:
+#: Neither is a view, and that is the line: both are called *by* a view but
+#: neither can be reached with a request alone — each needs a money record that
+#: only a real M-Pesa success could have produced.
+ALLOWED_TO_ACT_AS_SYSTEM = {
+    "payments/settlement.py",
+    "scheduling/transitions.py",
+    "payments/repoint.py",
+    "scheduling/holds.py",
+}
 
 
 class TestTheTableItself:

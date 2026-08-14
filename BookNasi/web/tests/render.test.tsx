@@ -307,7 +307,7 @@ test("the failure screen names the reason and offers no deposit-free detour", ()
   assert.ok(html.includes("1:30"), "the countdown stays — the retry happens inside it");
 });
 
-test("screen 8 says the shop calls, and never promises an automatic refund", () => {
+test("screen 8 offers the re-point, and never promises an automatic refund", () => {
   // The design said "automatic refund within 24 hr". Nothing automatic exists,
   // the money is with the shop rather than with us, and a promise the product
   // cannot keep is the worst thing to put on the one screen where the client is
@@ -320,14 +320,18 @@ test("screen 8 says the shop calls, and never promises an automatic refund", () 
   });
   const html = readable(
     renderToStaticMarkup(
-      <SlotLost state={stateWith(holdWith(lost, { status: "cancelled" }), "slotLost")} />
+      <SlotLost state={stateWith(holdWith(lost, { status: "cancelled" }), "slotLost")} flow={noopFlow} />
     )
   );
 
-  assert.ok(!/refund/i.test(html), "no refund promise — the money is with the shop");
+  assert.ok(!/refund/i.test(html), "still no refund promise — nothing automatic exists");
   assert.ok(!/24 ?h|24 hour/i.test(html));
-  assert.ok(html.includes("call you within the hour"));
-  assert.ok(html.includes("Your money is with the shop"));
+  // Slice 7 replaced the phone call with the client's own remedy: the deposit
+  // is re-pointed at whatever time they pick. The phone number stays *below*
+  // it as the fallback, because a re-point can lose its own race.
+  assert.ok(html.includes("Pick another time"), "the remedy is the lead action");
+  assert.ok(html.includes("comes with it"), "and it says the deposit travels");
+  assert.ok(html.includes("+254712000111"), "the fallback number is still there");
 });
 
 test("screen 8 shows the support code the client reads down the phone", () => {
@@ -341,7 +345,7 @@ test("screen 8 shows the support code the client reads down the phone", () => {
     slot_lost: true,
   });
   const html = renderToStaticMarkup(
-    <SlotLost state={stateWith(holdWith(lost, { status: "cancelled" }), "slotLost")} />
+    <SlotLost state={stateWith(holdWith(lost, { status: "cancelled" }), "slotLost")} flow={noopFlow} />
   );
 
   assert.ok(html.includes("BK-4F7K2Q"));

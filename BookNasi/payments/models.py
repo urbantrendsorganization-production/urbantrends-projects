@@ -121,6 +121,36 @@ class Payment(OrgDerivedModel):
     #: minted by `payments/support_codes.py`.
     support_code = models.CharField(max_length=16, unique=True)
 
+    # ------------------------------------------- slice 7: working the queue
+    #
+    # The exception queue was readable in slice 6 and could not be *worked*:
+    # a shop could see "paid, no booking" and had nowhere to record that they
+    # had rung the client and sorted it. So the same row kept appearing, and a
+    # queue that never empties is a queue nobody reads.
+    #
+    # Resolution is a stamp and a note rather than a state, deliberately. The
+    # payment's own state machine describes what happened to the *money*, and
+    # "somebody dealt with this" is not a money fact — collapsing the two would
+    # mean an admin could move a payment's state by writing a note.
+    #
+    # `queue_` prefixed because `resolved_at` above is already taken and means
+    # something else entirely: that one is stamped when the *payment* reaches a
+    # terminal state, this one when a *person* has finished with the row. Two
+    # fields called `resolved_at` on one model is how somebody later reports on
+    # the wrong one.
+    #: Stamped when a cancellation leaves this shop owing the client money back.
+    #: We are not the merchant — the deposit went to the shop's paybill and the
+    #: refund is theirs to send — so all this side can do is *record* it, put it
+    #: in front of a human, and stop pretending otherwise. §12's REFUND outcome
+    #: is the only thing that sets it; a CREDIT outcome resolves itself and
+    #: never appears here.
+    refund_due_at = models.DateTimeField(null=True, blank=True)
+    queue_resolved_at = models.DateTimeField(null=True, blank=True)
+    queue_resolved_by = models.ForeignKey(
+        "accounts.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    queue_note = models.CharField(max_length=255, blank=True)
+
     class Meta:
         db_table = "payments"
         ordering = ["-created_at"]
@@ -264,3 +294,15 @@ class PaymentMove(OrgDerivedModel):
 
     def __str__(self):
         return f"{self.payment.support_code} → {self.to_appointment_id}"
+
+
+# Slice 7's credit models live in `payments/credit.py`, next to the redemption
+# logic that is the only reason they have the shape they do. Imported here so
+# the app registry finds them: Django discovers models through `app.models`, and
+# a model in a sibling module is invisible until something pulls it in.
+from payments.credit import (  # noqa: E402,F401 — see above
+    Credit,
+    CreditRedemption,
+    CreditSource,
+    CreditState,
+)

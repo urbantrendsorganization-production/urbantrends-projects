@@ -26,7 +26,12 @@ from public_api.serializers import (
 )
 from scheduling.abuse import HoldRefused
 from scheduling.booking import SlotTaken, SlotUnavailable
-from scheduling.holds import ServiceNotPubliclyBookable, create_hold, release_hold
+from scheduling.holds import (
+    ServiceNotPubliclyBookable,
+    confirm_credit_covered,
+    create_hold,
+    release_hold,
+)
 from scheduling.models import Appointment
 from scheduling.statuses import BookingSource
 from shops.durations import ServiceNotOffered
@@ -229,10 +234,22 @@ class HoldCreateView(PublicViewMixin, APIView):
         # payment's own state is what that screen renders — including "we could
         # not reach M-Pesa, here is *334#". Turning it into a 502 would throw
         # away a live hold the client can still pay for.
-        try:
-            initiate_push(appointment)
-        except PushRefused as exc:
-            logger.warning("stk push refused for hold %s: %s", appointment.pk, exc.reason)
+        #
+        # Slice 7: a deposit fully covered by shop credit leaves nothing to
+        # push, and the booking confirms without one. That is CLAUDE.md §5's
+        # carve-out, not a hole in it — the credit descends from a succeeded
+        # payment made from this number, and a succeeded payment *is* the phone
+        # verification the deposit rule exists to provide. `create_hold` has
+        # already spent the credit and written the remainder to
+        # `deposit_snapshot`, so this reads one figure rather than recomputing.
+        if appointment.deposit_snapshot < 1:
+            confirm_credit_covered(appointment)
+            appointment.refresh_from_db()
+        else:
+            try:
+                initiate_push(appointment)
+            except PushRefused as exc:
+                logger.warning("stk push refused for hold %s: %s", appointment.pk, exc.reason)
 
         return Response(PublicHoldSerializer(appointment).data, status=status.HTTP_201_CREATED)
 

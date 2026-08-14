@@ -101,7 +101,7 @@ export function BookingScreens({ flow }: { flow: Flow }) {
       {state.step === "paid" && <Paid state={state} />}
       {state.step === "failed" && <Failed state={state} flow={flow} seconds={seconds} />}
       {state.step === "timedOut" && <TimedOut state={state} flow={flow} />}
-      {state.step === "slotLost" && <SlotLost state={state} />}
+      {state.step === "slotLost" && <SlotLost state={state} flow={flow} />}
     </main>
   );
 }
@@ -932,13 +932,22 @@ function TimedOut({ state, flow }: { state: BookingState; flow: Flow }) {
  * The design said "automatic refund within 24 hr". Nothing automatic exists,
  * the money is with the shop rather than with us, and a promise the product
  * cannot keep is the worst thing to put on the one screen where the client is
- * already unhappy. So this says what actually happens: the shop calls, within
- * the hour, and the support code is what the call is about.
+ * already unhappy. Slice 6 therefore said what actually happened: the shop
+ * calls, within the hour, and the support code is what the call is about.
  *
- * Slice 7 replaces the phone call with a "pick another time and carry your
- * deposit" button. The support code stays either way.
+ * **Slice 7 makes the remedy the client's own.** "Pick another time — your
+ * deposit comes with it" is the lead action now, backed by
+ * `payments/repoint.py`: the succeeded payment is re-pointed at whichever slot
+ * they choose and the booking confirms with no second push. The client ends the
+ * interaction with the thing they wanted, rather than with a promise that
+ * somebody will ring.
+ *
+ * The phone number stays, below it, and so does the support code. A remedy that
+ * removed the fallback would be worse than the phone call it replaced — the
+ * re-point can itself lose a race, and the client whose second choice also went
+ * still needs a human.
  */
-export function SlotLost({ state }: { state: BookingState }) {
+export function SlotLost({ state, flow }: { state: BookingState; flow: Flow }) {
   const hold = state.hold!;
   const payment = hold.payment;
   return (
@@ -958,7 +967,8 @@ export function SlotLost({ state }: { state: BookingState }) {
           was taken while the payment was going through.
         </p>
         <p style={{ margin: "var(--bn-space-6) 0 0", fontSize: "var(--bn-text-body-size)" }}>
-          Your money is with the shop and they will call you within the hour.
+          Nothing is lost. Pick another time below and your{" "}
+          {money(payment?.amount_kes ?? hold.deposit_kes)} comes with it.
         </p>
       </div>
 
@@ -997,6 +1007,23 @@ export function SlotLost({ state }: { state: BookingState }) {
         )}
       </Card>
 
+      <button
+        onClick={() => flow.pickAnotherTime()}
+        style={{
+          minHeight: INVARIANTS.minTargetHeightPx,
+          borderRadius: "var(--bn-radius-md)",
+          border: "none",
+          background: "var(--bn-accent)",
+          color: "#fff",
+          fontSize: "var(--bn-text-body-lg-size)",
+        }}
+      >
+        Pick another time
+      </button>
+
+      {/* The fallback, kept. A re-point can lose its own race, and the client
+          whose second choice also went needs a human — which is exactly the
+          case slice 6's phone call was written for. */}
       {hold.shop_phone && (
         <a href={`tel:${hold.shop_phone}`} style={{ ...secondaryButton(true, true), display: "grid", placeItems: "center", textDecoration: "none" }}>
           Call {hold.shop_phone}

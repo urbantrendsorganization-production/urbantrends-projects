@@ -26,8 +26,13 @@ from scheduling.availability import LOCAL_TZ
 
 logger = logging.getLogger(__name__)
 
+#: Templates whose copy names a credit. Listed so `variables_for` can guarantee
+#: the keys exist for exactly these and not sprinkle empty strings through every
+#: other message's variable dict.
+CREDIT_TEMPLATES = frozenset({Template.CANCELLED_CREDIT})
 
-def variables_for(appointment, template, *, payment=None):
+
+def variables_for(appointment, template, *, payment=None, credit=None):
     """The dict the provider renders from. EAT, because the client reads it."""
     local = appointment.starts_at.astimezone(LOCAL_TZ)
     shop = appointment.shop
@@ -46,28 +51,53 @@ def variables_for(appointment, template, *, payment=None):
     if template == Template.BOOKING_CONFIRMED:
         balance = max(appointment.price_snapshot - appointment.deposit_snapshot, 0)
         variables["balance"] = f"{balance:,}" if balance else ""
+    if template in CREDIT_TEMPLATES:
+        # Always present for these templates, even with no credit in hand, so a
+        # renderer cannot `KeyError` on a live message path. The values are the
+        # real ones whenever `lifecycle.cancel` supplies the credit it just
+        # issued — which is the only path that queues `CANCELLED_CREDIT`, and
+        # `test_a_credit_cancellation_names_the_figure_and_the_date` holds it
+        # to that. Blank here is a bug that shows up as blank copy rather than
+        # as a message that never sends.
+        variables["credit_expires"] = ""
+        variables["credit_reference"] = ""
+    if credit is not None:
+        # EAT and a date only. A client reading "valid until 13 Oct" acts on it;
+        # one reading a timestamp with an offset does not.
+        variables["credit_expires"] = credit.expires_at.astimezone(LOCAL_TZ).strftime("%-d %b %Y")
+        variables["credit_reference"] = credit.reference
+        variables["paid"] = f"{credit.amount_kes:,}"
+    variables.setdefault("paid", "0")
     return variables
 
 
 def booking_link(appointment):
-    """The one link in the message.
+    """The one link in the message. CLAUDE.md §12: "the link is the session."
 
-    Points at the booking's own page, which is the confirmation screen the
-    client just left — the same unguessable id the countdown screen polls, and
-    CLAUDE.md §12's "the link is the session".
+    Slice 7 widened this from the appointment's own id to its manage token, and
+    the page behind it from read-only to cancel-and-reschedule. That was always
+    the plan — slice 6's note here said it was one function when the screen
+    existed, and this is the function.
 
-    It is **not yet** the signed, expiring manage link with a reschedule and a
-    cancel on it. That screen is the lifecycle slice, and a link to a page that
-    cannot do what the SMS implies is worse than a link to the one that can
-    already show them their booking. Widening this to the manage token is one
-    function, here, when that screen exists.
+    `/m/<token>` rather than `/booking/<id>`: the token is the credential, and a
+    URL carrying both would invite somebody to treat the id as the thing that
+    matters. Short, too — every character here is charged for on every message
+    (§6), which is the same reasoning that made the token stored rather than
+    signed. See `scheduling/manage_tokens`.
+
+    Falls back to the read-only id page when a booking has no token: walk-ins
+    never get one, and neither does a cancelled booking whose token has been
+    revoked — but a cancellation SMS still has to link somewhere real.
     """
     from django.conf import settings
 
-    return f"{settings.PUBLIC_BASE_URL.rstrip('/')}/booking/{appointment.pk}"
+    base = settings.PUBLIC_BASE_URL.rstrip("/")
+    if appointment.manage_token:
+        return f"{base}/m/{appointment.manage_token}"
+    return f"{base}/booking/{appointment.pk}"
 
 
-def queue_message(appointment, template, *, payment=None, to=None):
+def queue_message(appointment, template, *, payment=None, credit=None, to=None):
     """Write the row and arrange for it to be sent after this commits.
 
     Returns the `Message`, or None when this one-shot has already been sent.
@@ -83,7 +113,7 @@ def queue_message(appointment, template, *, payment=None, to=None):
         appointment=appointment,
         template=template,
         to=normalize_phone(number),
-        variables=variables_for(appointment, template, payment=payment),
+        variables=variables_for(appointment, template, payment=payment, credit=credit),
     )
     try:
         with transaction.atomic():

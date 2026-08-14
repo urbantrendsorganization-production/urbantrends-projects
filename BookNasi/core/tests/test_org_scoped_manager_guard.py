@@ -12,7 +12,7 @@ from clients.models import Client
 from core.managers import CrossTenantQueryError
 from notifications.models import Message
 from orgs.models import Membership, StaffInvite
-from payments.models import Payment, PaymentMove
+from payments.models import Credit, CreditRedemption, Payment, PaymentMove
 from scheduling.models import Appointment
 from shops.models import (
     Leave,
@@ -52,6 +52,11 @@ ORG_SCOPED_MODELS = [
     Payment,
     PaymentMove,
     Message,
+    # slice 7. Credit is a shop's liability to one client, and a redemption is
+    # where it went — both carry money and both are org-derived, so both are
+    # exactly the kind of row a cross-tenant read must never reach.
+    Credit,
+    CreditRedemption,
 ]
 
 

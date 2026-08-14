@@ -145,21 +145,28 @@ class TestEveryEmittedLinkResolves:
 
 
 class TestTheLinkPointsAtTheBooking:
-    def test_the_confirmation_link_is_the_booking_page(self, held, rendered_messages):
+    def test_the_confirmation_link_is_the_manage_page(self, held, rendered_messages):
         """Not just *a* route — the right one. `/book/<slug>` is also a real
         page, so matching the route table alone would accept a link that
-        dropped the client back at the start of the flow."""
+        dropped the client back at the start of the flow.
+
+        Slice 7 moved this from `/booking/<id>` to `/m/<token>`: the token is
+        the credential and the page behind it can now cancel and reschedule.
+        The appointment id is deliberately *not* in the URL — it is not the
+        credential, and a URL carrying both invites somebody to treat it as one.
+        """
         body = rendered_messages[Template.BOOKING_CONFIRMED]
         path = path_of(urls_in(body)[0])
 
-        assert path == f"/booking/{held.pk}"
+        assert path == f"/m/{held.manage_token}"
+        assert str(held.pk) not in path
 
     def test_a_queued_message_carries_the_same_link(self, held, console_messages):
         """`render` is only used by the SMS adapter. A WhatsApp adapter reads
         the variables, so the link has to be correct there too."""
         message = queue_message(held, Template.BOOKING_CONFIRMED)
 
-        assert message.variables["link"] == f"{settings.PUBLIC_BASE_URL}/booking/{held.pk}"
+        assert message.variables["link"] == f"{settings.PUBLIC_BASE_URL}/m/{held.manage_token}"
 
 
 class TestExpiryDoesNotChangeTheLink:

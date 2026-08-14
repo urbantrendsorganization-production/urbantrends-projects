@@ -25,6 +25,8 @@ export interface Transport {
   ): Promise<Availability>;
   createHold(slug: string, request: HoldRequest): Promise<Hold>;
   getHold(holdId: string): Promise<Hold>;
+  /** Slice 7's slotLost remedy: carry a paid deposit onto a freshly held slot. */
+  repointPayment(supportCode: string, holdId: string): Promise<unknown>;
   releaseHold(holdId: string): Promise<Hold>;
   /** A second STK prompt for a hold that already has one. Refused by the
    *  server past its rate, count or grace ceiling — see `flow.resend`. */
@@ -89,5 +91,7 @@ export function httpTransport({
     getHold: (holdId) => call(`/holds/${holdId}/`),
     releaseHold: (holdId) => call(`/holds/${holdId}/release/`, { method: "POST" }),
     resendPush: (holdId) => call(`/holds/${holdId}/resend/`, { method: "POST" }),
+    repointPayment: (supportCode, holdId) =>
+      call(`/payments/${supportCode}/repoint/`, { method: "POST", body: { hold: holdId } }),
   };
 }

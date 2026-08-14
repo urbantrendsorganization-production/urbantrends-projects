@@ -1,6 +1,6 @@
 from django.urls import path
 
-from public_api import views
+from public_api import lifecycle_views, views
 from scheduling import views as scheduling_views
 
 app_name = "public_api"
@@ -40,5 +40,28 @@ urlpatterns = [
         "holds/<uuid:hold_id>/resend/",
         views.HoldResendView.as_view(),
         name="hold-resend",
+    ),
+    # Slice 7, the lifecycle. Not shop-scoped and not id-scoped: the token *is*
+    # the session (CLAUDE.md §12), and it resolves to exactly one appointment in
+    # one tenant. `<str:token>` rather than a typed converter so a malformed
+    # token reaches the view and gets the same 404 as a wrong one — a URL-level
+    # rejection would be a different response for a different failure, which is
+    # the existence oracle `lifecycle_views` exists to avoid.
+    path("manage/<str:token>/", lifecycle_views.ManageDetailView.as_view(), name="manage-detail"),
+    path(
+        "manage/<str:token>/cancel/",
+        lifecycle_views.ManageCancelView.as_view(),
+        name="manage-cancel",
+    ),
+    path(
+        "manage/<str:token>/reschedule/",
+        lifecycle_views.ManageRescheduleView.as_view(),
+        name="manage-reschedule",
+    ),
+    # The slotLost remedy. Keyed by support code, which is what screen 8 shows.
+    path(
+        "payments/<str:support_code>/repoint/",
+        lifecycle_views.RepointView.as_view(),
+        name="payment-repoint",
     ),
 ]
