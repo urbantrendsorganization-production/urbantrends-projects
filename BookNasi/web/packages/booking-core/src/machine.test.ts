@@ -239,6 +239,9 @@ const HOLD: Hold = {
   // hold existing and the prompt being accepted is real and short.
   payment: null,
   shop_phone: "+254712000111",
+  shop_name: "Mint Braids",
+  refund_window_hours: 24,
+  deposit_credit_days: 60,
 };
 
 test("the countdown is computed from the server's expiry, not a local timer", () => {
@@ -299,7 +302,37 @@ test("the refund sentence survives the host relabelling 'deposit'", () => {
   // CLAUDE.md §10: translatable and relabellable, never removable.
   assert.match(refundSentence(24), /24 hours/);
   assert.match(refundSentence(24), /deposit/);
-  assert.match(refundSentence(48, "reservation fee"), /reservation fee is refunded/);
+  assert.match(refundSentence(48, 60, "reservation fee"), /reservation fee is refunded/);
+});
+
+test("the refund sentence states all four outcomes", () => {
+  // CLAUDE.md §12, settled 14 August 2026. §5 requires the client to read the
+  // terms before they pay, and a term that is not in this sentence is a term
+  // nobody reads — every forfeit it fails to mention becomes a support ticket.
+  const sentence = refundSentence(24, 60);
+
+  assert.match(sentence, /more than 24 hours before .* is refunded/);
+  assert.match(sentence, /later .* credit at this shop for 60 days/);
+  assert.match(sentence, /miss the appointment and it is kept/i);
+  assert.match(sentence, /if the shop cancels you are refunded/i);
+});
+
+test("the refund sentence follows the shop's own numbers", () => {
+  const sentence = refundSentence(48, 90);
+
+  assert.match(sentence, /48 hours/);
+  assert.match(sentence, /90 days/);
+  assert.doesNotMatch(sentence, /24 hours/);
+  assert.doesNotMatch(sentence, /60 days/);
+});
+
+test("the refund sentence is one sentence", () => {
+  // One, because a client reads one. The clauses are separated by semicolons
+  // for exactly this reason — see §12.
+  const sentence = refundSentence(24, 60);
+
+  assert.equal(sentence.match(/\./g)?.length, 1);
+  assert.ok(sentence.endsWith("."));
 });
 
 // ------------------------------------------------------ the payment screens

@@ -199,7 +199,19 @@ Settled 1 August 2026 at the close of design scoping. Implement these; don't re-
 **Money**
 
 - **The shop sets the deposit rule**, in three modes: flat KES, percentage of price, or none. Service creation **pre-fills 25%**. Us setting it centrally is a pricing decision inside someone else's business that we can't defend per-shop; leaving it blank means it stays blank.
-- **`refund_window_hours` ships in slice 2** with a default of 24, independent of the policy decision below.
+- **`refund_window_hours` ships in slice 2** with a default of 24.
+- **The refund and forfeit terms**, settled 14 August 2026. Four outcomes:
+
+  | What happens | The deposit |
+  |---|---|
+  | Client cancels more than `refund_window_hours` (default 24) before | Refunded |
+  | Client cancels later than that | Becomes credit at that shop, valid `deposit_credit_days` (default 60), against any service |
+  | Client does not turn up | Forfeited |
+  | The shop cancels | Refunded, regardless of when |
+
+  Late cancellation becomes credit rather than a forfeit because a forfeit gives a client who is already going to miss the appointment a reason to say nothing — and a slot nobody frees is worth less to the shop than a slot freed late. Credit keeps the money in the shop and gets the chair back. The no-show is the only forfeit, and it is the one case the client fully controls.
+
+  The last two rows are **not** shop-configurable, and only the first two have fields. A shop that could keep a deposit against its own cancellation is a term no client would accept if they read it, and they must read it: **the sentence appears on the confirm screen before payment, and again on the booking page the confirmation SMS links to.** `packages/booking-core/src/money.refundSentence` is the one place it is worded; §10 lets a host translate or relabel it, never remove it.
 
 **Delivery**
 
@@ -215,9 +227,13 @@ Settled 1 August 2026 at the close of design scoping. Implement these; don't re-
 - **"Anyone available" is earliest-available-slot**, not an assignment algorithm.
 - Owner adoption warnings ("Thika Rd has recorded no walk-ins in 9 days") are **out of v1**.
 
+### Settled since
+
+Both of the questions that were open here have been answered. Kept visible rather than deleted, because the reasoning is what stops them being reopened by accident.
+
+1. **Refund and forfeit terms** — decided 14 August 2026, in **Money** above.
+2. **The `slotLost` remedy** — decided at slice 6. Screen 8 says the shop calls within the hour and shows the support code that call is about. It deliberately does **not** repeat the design's "automatic refund within 24 hr": nothing automatic exists, the money is with the shop rather than with us, and a promise the product cannot keep is the worst thing to put on the one screen where the client is already unhappy. Slice 7 replaces the phone call with "pick another time and carry your deposit" — `Payment.appointment` is reassignable and `PaymentMove` exists for it. The support code stays either way, and a test asserts the screen never claims an automatic refund.
+
 ### Still open — do not silently decide these
 
-1. **Exact refund and forfeit terms.** The window field ships in slice 2; the policy itself is decided before slice 7. Whatever it becomes, the client must read it before they pay.
-2. **The `slotLost` remedy.** The client paid, the callback was slow, and the slot went to someone else. The design's state machine names the state but draws no screen for it, and it is the worst support call this product can generate. Needs a screen and a defined remedy before slice 6 ships. Three options with trade-offs get written at slice 6 planning — not before.
-
-If a task requires one of these answered, surface it and propose an option — don't pick one and bury it in a commit.
+Nothing at present. When something lands here, the rule stands: if a task requires it answered, surface it and propose an option — don't pick one and bury it in a commit.

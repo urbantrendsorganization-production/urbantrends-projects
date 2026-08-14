@@ -25,6 +25,7 @@ const SHOP: Shop = {
   accent_color: "",
   hold_ttl_minutes: 3,
   refund_window_hours: 24,
+  deposit_credit_days: 60,
   opening_hours: [],
 };
 
@@ -77,6 +78,9 @@ const HOLD: Hold = {
   // hold existing and the prompt being accepted is real and short.
   payment: null,
   shop_phone: "+254712000111",
+  shop_name: "Mint Braids",
+  refund_window_hours: 24,
+  deposit_credit_days: 60,
 };
 
 /** A live prompt: accepted by Safaricom, no verdict yet. */

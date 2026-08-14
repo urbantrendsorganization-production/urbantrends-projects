@@ -586,7 +586,10 @@ function Confirm({ state, flow }: { state: BookingState; flow: Flow }) {
             fontSize: "var(--bn-text-body-sm-size)",
           }}
         >
-          {refundSentence(state.shop?.refund_window_hours ?? 24)}
+          {refundSentence(
+            state.shop?.refund_window_hours ?? 24,
+            state.shop?.deposit_credit_days ?? 60,
+          )}
         </p>
       </Card>
 

@@ -81,8 +81,12 @@ class PublicShopSerializer(serializers.Serializer):
     # Drives the hold countdown. The countdown is not themeable and not
     # hideable — CLAUDE.md §10 — so the client has to be told its length.
     hold_ttl_minutes = serializers.IntegerField(read_only=True)
-    # The refund rule is shown before payment, never after.
+    # The refund rule is shown before payment, never after. Both halves of it:
+    # the window, and how long a late cancellation's credit lasts. CLAUDE.md §12
+    # settled the terms on 14 August 2026 and §5 requires the client to read
+    # them before they pay, which means the public API has to carry them.
     refund_window_hours = serializers.IntegerField(read_only=True)
+    deposit_credit_days = serializers.IntegerField(read_only=True)
     opening_hours = serializers.SerializerMethodField()
 
     class Meta:
@@ -176,6 +180,24 @@ class PublicHoldSerializer(serializers.Serializer):
     #: rather than "expired" — see `get_payment`.
     payment = serializers.SerializerMethodField()
     shop_phone = serializers.SerializerMethodField()
+    shop_name = serializers.SerializerMethodField()
+    #: The refund terms, again. They are on the confirm screen before payment
+    #: (CLAUDE.md §5) and they are here because the confirmation SMS links to
+    #: the booking's own page, and a client reading the terms afterwards should
+    #: find the same sentence rather than have to remember it. Two integers, not
+    #: prose: the copy is the client's to render and relabel — §10 — and the
+    #: policy behind it is §12's.
+    refund_window_hours = serializers.SerializerMethodField()
+    deposit_credit_days = serializers.SerializerMethodField()
+
+    def get_shop_name(self, appointment):
+        return appointment.shop.name
+
+    def get_refund_window_hours(self, appointment):
+        return appointment.shop.refund_window_hours
+
+    def get_deposit_credit_days(self, appointment):
+        return appointment.shop.deposit_credit_days
 
     def get_shop_phone(self, appointment):
         """The number on screen 5's fallback line and screen 8's footer.

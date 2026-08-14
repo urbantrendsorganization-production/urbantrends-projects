@@ -655,6 +655,13 @@ class TestTheHoldEndpoints:
             # `shop_phone` is already on the shop's public page header.
             "payment",
             "shop_phone",
+            # The refund terms and the shop's name, for the booking page the
+            # confirmation SMS links to. That page is reached by appointment id
+            # from an SMS and has no shop object to read them from. All three
+            # are already public on the shop's own page — CLAUDE.md §12.
+            "shop_name",
+            "refund_window_hours",
+            "deposit_credit_days",
         }
 
     def test_the_payment_block_names_no_person(self, api_client, shop_setup, wednesday):

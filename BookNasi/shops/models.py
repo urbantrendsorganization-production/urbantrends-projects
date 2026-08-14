@@ -102,10 +102,33 @@ class Shop(OrgScopedModel):
         validators=[MinValueValidator(1), MaxValueValidator(MAX_MIN_DEPOSIT)],
         help_text="Floor for every deposit at this shop, in whole shillings.",
     )
+    # The refund policy, decided 14 August 2026 and recorded in CLAUDE.md §12.
+    # Four outcomes, and only the first two are configurable here:
+    #
+    #   cancel earlier than `refund_window_hours`  -> deposit refunded
+    #   cancel later than it                       -> shop credit, for
+    #                                                 `deposit_credit_days`
+    #   no-show                                    -> forfeited
+    #   the shop cancels                           -> refunded, regardless
+    #
+    # The last two are not fields because they are not the shop's to vary: a
+    # forfeit the client can avoid by turning up, and a refund they cannot lose
+    # to a cancellation they did not make. Making either configurable would put
+    # a shop in a position to keep money for its own cancellation, which is the
+    # one term no client would agree to if it were shown to them — and §5 says
+    # it must be shown to them before they pay.
     refund_window_hours = models.PositiveSmallIntegerField(
         default=24,
         validators=[MaxValueValidator(168)],
-        help_text="Cancel earlier than this and the deposit is refundable. CLAUDE.md §12.",
+        help_text="Cancel earlier than this and the deposit is refunded. CLAUDE.md §12.",
+    )
+    deposit_credit_days = models.PositiveSmallIntegerField(
+        default=60,
+        validators=[MinValueValidator(1), MaxValueValidator(365)],
+        help_text=(
+            "Cancel later than the refund window and the deposit becomes credit "
+            "at this shop for this many days, against any service. CLAUDE.md §12."
+        ),
     )
 
     is_active = models.BooleanField(default=True)
@@ -120,6 +143,10 @@ class Shop(OrgScopedModel):
             ),
             models.CheckConstraint(
                 condition=Q(refund_window_hours__lte=168), name="shop_refund_window_sane"
+            ),
+            models.CheckConstraint(
+                condition=Q(deposit_credit_days__gte=1, deposit_credit_days__lte=365),
+                name="shop_deposit_credit_days_sane",
             ),
             models.CheckConstraint(
                 condition=Q(slot_interval_minutes__gte=5, slot_interval_minutes__lte=60),

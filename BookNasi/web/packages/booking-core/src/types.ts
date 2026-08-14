@@ -20,6 +20,8 @@ export interface Shop {
   hold_ttl_minutes: number;
   /** The refund rule is stated before payment, never after. */
   refund_window_hours: number;
+  /** How long a late cancellation's deposit stays usable as shop credit. */
+  deposit_credit_days: number;
   opening_hours: { weekday: number; opens_at: string; closes_at: string }[];
 }
 
@@ -89,9 +91,17 @@ export interface PaymentView {
   slot_lost: boolean;
 }
 
-export interface Hold {
+/** The refund terms, as two numbers the copy is rendered from. See §12. */
+export interface RefundTerms {
+  refund_window_hours: number;
+  deposit_credit_days: number;
+}
+
+export interface Hold extends RefundTerms {
   id: string;
   status: string;
+  /** For the booking page the confirmation SMS links to, which has no shop. */
+  shop_name: string;
   starts_at: string;
   ends_at: string;
   local_time: string;

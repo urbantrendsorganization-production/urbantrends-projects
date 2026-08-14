@@ -169,6 +169,9 @@ function holdWith(payment: PaymentView | null, over: Partial<Hold> = {}): Hold {
     balance_kes: 2625,
     payment,
     shop_phone: "+254712000111",
+    shop_name: "Mint Braids",
+    refund_window_hours: 24,
+    deposit_credit_days: 60,
     ...over,
   };
 }
