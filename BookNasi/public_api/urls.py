@@ -35,4 +35,10 @@ urlpatterns = [
         views.HoldReleaseView.as_view(),
         name="hold-release",
     ),
+    # Slice 6. Screen 5's "Resend the prompt", bounded in payments/stk.py.
+    path(
+        "holds/<uuid:hold_id>/resend/",
+        views.HoldResendView.as_view(),
+        name="hold-resend",
+    ),
 ]

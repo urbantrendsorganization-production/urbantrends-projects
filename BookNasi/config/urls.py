@@ -16,4 +16,8 @@ urlpatterns = [
     # share no code with the org-scoped ones above — CLAUDE.md §1. A shared
     # serializer with an `if request.user` branch is how tenant data leaks.
     path("api/public/v1/", include("public_api.urls")),
+    # Safaricom's callback. Not under `public/v1` because it is not part of the
+    # public booking API — no integrator calls it, its shape is Safaricom's, and
+    # it answers 200 to everything. See payments/views.py.
+    path("api/mpesa/", include("payments.urls")),
 ]

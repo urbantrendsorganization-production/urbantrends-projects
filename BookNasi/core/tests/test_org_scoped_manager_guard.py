@@ -10,7 +10,9 @@ import pytest
 
 from clients.models import Client
 from core.managers import CrossTenantQueryError
+from notifications.models import Message
 from orgs.models import Membership, StaffInvite
+from payments.models import Payment, PaymentMove
 from scheduling.models import Appointment
 from shops.models import (
     Leave,
@@ -45,6 +47,11 @@ ORG_SCOPED_MODELS = [
     # slice 3
     Client,
     Appointment,
+    # slice 6. `MpesaCallback` is deliberately absent: it is not org-scoped,
+    # because an unmatched callback belongs to no tenant. See its docstring.
+    Payment,
+    PaymentMove,
+    Message,
 ]
 
 

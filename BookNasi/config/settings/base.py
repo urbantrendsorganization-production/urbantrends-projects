@@ -1,3 +1,4 @@
+from datetime import timedelta
 from pathlib import Path
 
 from config.env import database_config, env, env_list
@@ -25,6 +26,8 @@ INSTALLED_APPS = [
     "shops",
     "clients",
     "scheduling",
+    "payments",
+    "notifications",
     "public_api",
 ]
 
@@ -89,6 +92,21 @@ CELERY_BEAT_SCHEDULE = {
         # harmless — just pointless load at the worst possible moment.
         "options": {"expires": 55.0},
     },
+    # Slice 6. **A separate mechanism from the hold sweep above**, on its own
+    # schedule, because the two answer different questions: that one decides
+    # whether a slot goes back on offer, this one decides what happened to
+    # money. One job doing both means a slow M-Pesa holds the calendar hostage,
+    # or a busy calendar skips a payment. See payments/reconcile.py.
+    "reconcile-unresolved-payments": {
+        "task": "payments.sweep_unresolved_payments",
+        "schedule": 120.0,
+        "options": {"expires": 115.0},
+    },
+    "escalate-stale-payments": {
+        "task": "payments.escalate_stale_payments",
+        "schedule": 3600.0,
+        "options": {"expires": 3500.0},
+    },
 }
 
 AUTH_USER_MODEL = "accounts.User"
@@ -129,7 +147,18 @@ REST_FRAMEWORK = {
     # limits in that module are what actually bound the exposure.
     "DEFAULT_THROTTLE_RATES": {
         "public-read": "240/hour",
+        # The polled endpoint, on its own budget. One booking spends ~180
+        # requests here over a three-minute hold plus its grace window, so
+        # leaving it inside `public-read` meant a single client could exhaust
+        # the shared ceiling and a second client behind the same carrier-grade
+        # NAT address would be 429'd in the middle of paying. See
+        # `public_api.views.HoldDetailView`.
+        "hold-read": "1200/hour",
         "hold-create": "12/hour",
+        # Resend is bounded per appointment in `payments/stk.py`, which is the
+        # real control. This is the same crude per-IP ceiling as above, and is
+        # loose for the same carrier-grade-NAT reason.
+        "stk-resend": "30/hour",
     },
 }
 
@@ -140,6 +169,63 @@ CSRF_COOKIE_SAMESITE = "Lax"
 # Invites are delivered by SMS and typed on a phone. Long enough to survive a
 # day off, short enough that a leaked SMS is not a standing key.
 STAFF_INVITE_TTL_DAYS = 14
+
+# Where the client-facing pages live. Used to build the one link an SMS carries.
+PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", "http://localhost:3000")
+
+# --------------------------------------------------------------- slice 6
+
+# Safaricom Daraja. Nothing real here and nothing real in `.env.example` —
+# CLAUDE.md §5 and §11. A sandbox shortcode is still a credential.
+MPESA = {
+    "BASE_URL": env("MPESA_BASE_URL", "https://sandbox.safaricom.co.ke"),
+    "CONSUMER_KEY": env("MPESA_CONSUMER_KEY", ""),
+    "CONSUMER_SECRET": env("MPESA_CONSUMER_SECRET", ""),
+    "SHORTCODE": env("MPESA_SHORTCODE", ""),
+    "PASSKEY": env("MPESA_PASSKEY", ""),
+    "CALLBACK_URL": env("MPESA_CALLBACK_URL", ""),
+    "TIMEOUT_SECONDS": int(env("MPESA_TIMEOUT_SECONDS", "20")),
+}
+# The real client is opt-in. Local work and every test run against
+# `FakeDarajaClient`, which implements the same two methods — the seam is at the
+# interface rather than inside the code under test, so `stk.py` and
+# `callbacks.py` are exercised exactly as they run in production.
+MPESA_CLIENT = env("MPESA_CLIENT", "payments.daraja.FakeDarajaClient")
+# A secret path segment on the callback URL. Safaricom does not sign callbacks
+# and does not offer mutual TLS, so without this the endpoint that confirms
+# bookings is a public POST anyone can forge. Configured once with the shortcode.
+MPESA_CALLBACK_TOKEN = env("MPESA_CALLBACK_TOKEN", "local-callback-token")
+
+# Invariant 4 (CLAUDE.md §10): the USSD fallback line, as a constant rather than
+# a string in a view. It ships in `packages/tokens` for the client; this is the
+# copy the API puts in a refusal message.
+USSD_FALLBACK = "*334#"
+
+# The grace window. A hold whose STK push is unanswered survives its TTL by this
+# much and no longer — see `scheduling/holds.hold_is_releasable`. It is the
+# mechanism that makes `slotLost` rare instead of routine, and it is bounded by
+# derivation rather than by a column, so nothing can extend it.
+HOLD_GRACE_MINUTES = int(env("HOLD_GRACE_MINUTES", "2"))
+
+# Reconciliation. We do not wait to be told what happened to a payment; we ask.
+PAYMENT_QUERY_AFTER = timedelta(seconds=int(env("PAYMENT_QUERY_AFTER_SECONDS", "90")))
+PAYMENT_QUERY_MAX_ATTEMPTS = int(env("PAYMENT_QUERY_MAX_ATTEMPTS", "4"))
+PAYMENT_SWEEP_BATCH = int(env("PAYMENT_SWEEP_BATCH", "200"))
+PAYMENT_ESCALATE_AFTER = timedelta(hours=int(env("PAYMENT_ESCALATE_AFTER_HOURS", "24")))
+
+# Resend, bounded. Safaricom's own prompt lives about a minute, so anything
+# faster than that just puts two prompts on one phone.
+STK_RESEND_MAX = int(env("STK_RESEND_MAX", "2"))
+STK_RESEND_MIN_INTERVAL_SECONDS = int(env("STK_RESEND_MIN_INTERVAL_SECONDS", "45"))
+
+# Messaging. SMS first, behind the provider interface — CLAUDE.md §6 and §12.
+# The console provider is the default because there is no gateway account yet;
+# swapping it is one line here, which is the claim the interface is making.
+MESSAGE_PROVIDER = env("MESSAGE_PROVIDER", "notifications.providers.ConsoleProvider")
+SMS = {
+    "API_KEY": env("SMS_API_KEY", ""),
+    "SENDER_ID": env("SMS_SENDER_ID", "BOOKNASI"),
+}
 
 LOGGING = {
     "version": 1,

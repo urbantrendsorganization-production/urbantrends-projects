@@ -33,6 +33,25 @@ from rest_framework import serializers
 from shops.models import OpeningHours, Service, Shop, Staff
 
 
+def _client_message_for(payment):
+    """The safe sentence screen 7 shows. Never Safaricom's raw `ResultDesc`.
+
+    Two sources, because a payment can fail in two places. A callback brings a
+    `ResultCode` and `RESULT_MESSAGES` maps it. A push Safaricom refused
+    outright never gets that far — it carries only a `result_desc` from the push
+    call — and left unhandled it produced an empty string, so screen 7 named a
+    failure and then gave no reason for it.
+    """
+    from payments.messages import client_message, push_not_sent_message
+    from payments.states import PaymentState
+
+    if payment.result_code not in (None, 0):
+        return client_message(payment.result_code)
+    if payment.state == PaymentState.PUSH_FAILED:
+        return push_not_sent_message()
+    return ""
+
+
 class PublicOpeningHoursSerializer(serializers.Serializer):
     weekday = serializers.IntegerField(read_only=True)
     opens_at = serializers.TimeField(read_only=True)
@@ -153,6 +172,65 @@ class PublicHoldSerializer(serializers.Serializer):
     price_kes = serializers.IntegerField(source="price_snapshot", read_only=True)
     deposit_kes = serializers.IntegerField(source="deposit_snapshot", read_only=True)
     balance_kes = serializers.SerializerMethodField()
+    #: Slice 6. The countdown has to be able to say "still checking with M-Pesa"
+    #: rather than "expired" — see `get_payment`.
+    payment = serializers.SerializerMethodField()
+    shop_phone = serializers.SerializerMethodField()
+
+    def get_shop_phone(self, appointment):
+        """The number on screen 5's fallback line and screen 8's footer.
+
+        Public already: it is on the shop's own booking page header.
+        """
+        return appointment.shop.phone
+
+    def get_payment(self, appointment):
+        """What the STK waiting screen renders itself from.
+
+        Four things, and each one is on a screen:
+
+        - `state` drives screens 5 → 6 / 7 / 8. It is the *payment's* state, not
+          the appointment's, because those are two machines and the client is
+          watching the money one.
+        - `push_outstanding` is the fact the countdown needs. Without it a
+          client whose timer reaches 0:00 while Safaricom is still thinking is
+          told the slot expired, which is the unexplained failure CLAUDE.md §10
+          invariant 3 exists to prevent. With it the screen says "still checking
+          with M-Pesa" and stays honest.
+        - `message` is client-safe copy, never Safaricom's raw ResultDesc.
+          Screen 7 names the reason; `payments/messages.py` decides which
+          reasons are safe to name.
+        - `support_code` is what screen 8 shows and what the client reads down
+          the phone. Present as soon as a push exists, because the case it is
+          for is the one where nothing else worked.
+
+        The M-Pesa receipt is here too — screen 6 puts it above everything else,
+        since it is the client's proof at the door.
+        """
+        from payments.states import OrphanReason, PaymentState
+        from payments.stk import outstanding_push
+
+        payment = appointment.payments.order_by("-created_at").first()
+        if payment is None:
+            return None
+        return {
+            "state": payment.state,
+            "amount_kes": payment.amount,
+            "support_code": payment.support_code,
+            "mpesa_receipt": payment.mpesa_receipt,
+            "push_outstanding": outstanding_push(appointment),
+            "message": _client_message_for(payment),
+            # ORPHANED is not enough on its own. `settle_succeeded` orphans for
+            # four reasons and only one of them is the lost race screen 8
+            # describes; the other three leave the booking intact. Combined with
+            # this serializer always reporting the *newest* payment, a client who
+            # answered two prompts would be shown "your slot was taken, the shop
+            # will call" over a booking that is confirmed and paid for.
+            "slot_lost": (
+                payment.state == PaymentState.ORPHANED
+                and payment.orphan_reason == OrphanReason.SLOT_LOST
+            ),
+        }
 
     def get_local_time(self, appointment):
         from scheduling.availability import LOCAL_TZ

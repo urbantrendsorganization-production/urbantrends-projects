@@ -24,7 +24,9 @@ two people, and a `get_or_create` on the raw string would do exactly that.
 
 import logging
 from contextvars import ContextVar
+from datetime import timedelta
 
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
@@ -154,6 +156,59 @@ def cancel_scheduled_release(task_id, *, appointment_id=None):
         logger.warning("could not revoke hold release for %s", appointment_id)
 
 
+def grace_ceiling(appointment):
+    """The hard limit past which a hold is released whatever M-Pesa is doing.
+
+    `hold_expires_at + HOLD_GRACE_MINUTES`. Derived, never stored, and that is
+    the point: the ceiling is a fixed distance from a timestamp that nothing
+    moves, so it extends **once** and cannot be pushed out by a resend, a retry
+    or a second push. There is no code path that can lengthen it, because there
+    is no column to lengthen.
+    """
+    if appointment.hold_expires_at is None:
+        return None
+    return appointment.hold_expires_at + timedelta(minutes=settings.HOLD_GRACE_MINUTES)
+
+
+def hold_is_releasable(appointment, *, now=None):
+    """Should the slot go back on offer yet?
+
+    Slice 6's one change to the hold lifecycle, and the mechanism the client
+    picked for `slotLost`: shrink the population rather than service it.
+
+    A hold whose STK push is still outstanding is **not** released the instant
+    its TTL runs out. Safaricom is often a few seconds late and sometimes a
+    minute late, and releasing at exactly `hold_expires_at` manufactures the
+    worst state this product has — the client's money left, the slot went to
+    somebody else, and nobody did anything wrong. The grace window costs the
+    next client up to two minutes of a slot that was probably about to be paid
+    for anyway; the alternative costs somebody their money and their booking.
+
+    Bounded, and bounded in the strongest available way: see `grace_ceiling`.
+    """
+    now = now or timezone.now()
+    if appointment.hold_expires_at is None or appointment.hold_expires_at > now:
+        return False
+
+    ceiling = grace_ceiling(appointment)
+    if ceiling is not None and now < ceiling and payment_outstanding_for(appointment):
+        return False
+    return True
+
+
+def payment_outstanding_for(appointment):
+    """Is there an STK push against this hold that Safaricom has not answered?
+
+    Imported late and deliberately: `payments` depends on `scheduling` through a
+    foreign key, so the arrow at import time has to go the other way. One lazy
+    import here is cheaper than a signal, a registry or a hook, and it is
+    greppable — which a registry is not.
+    """
+    from payments.machine import awaiting_result_for
+
+    return awaiting_result_for(appointment).exists()
+
+
 def release_hold(appointment, *, now=None, expired=True):
     """Give the slot back. Idempotent, and safe to call from anywhere.
 
@@ -180,4 +235,33 @@ def release_hold(appointment, *, now=None, expired=True):
         apply_transition(appointment, AppointmentStatus.CANCELLED, now=now, expired_hold=expired)
     finally:
         _releasing.reset(token)
+
+    if expired:
+        _tell_them_the_hold_went(appointment)
     return True
+
+
+def _tell_them_the_hold_went(appointment):
+    """One SMS when a hold runs out. Slice 6.
+
+    Not cosmetic. The design's screen 8 tells a client their slot was released,
+    and a client who closed the page never sees it — they find out at the shop,
+    which is the same experience as a double booking from where they are
+    standing. A client who pressed cancel gets nothing: they already know.
+
+    Lazy import for the same reason as `payment_outstanding_for` above.
+    """
+    from notifications.service import queue_message
+    from notifications.templates import Template
+
+    if appointment.source != BookingSource.ONLINE:
+        return
+    if payment_outstanding_for(appointment):
+        # Past the grace ceiling with a push still live. The slot genuinely goes
+        # back on offer — that part is right — but this message says "Nothing
+        # was taken from your M-Pesa", and we do not know that. If the late
+        # callback then lands, the client is holding an SMS that contradicts the
+        # confirmation (or the slot-lost notice) that follows it. Silence here;
+        # the settlement path sends whichever message turns out to be true.
+        return
+    queue_message(appointment, Template.HOLD_RELEASED)

@@ -8,12 +8,15 @@ Slice 5 adds availability and hold creation here. Slice 10's widget and any
 third-party integrator consume this and only this.
 """
 
+import logging
+
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from payments.stk import PushRefused, initiate_push, resend_push
 from public_api.serializers import (
     HoldRequestSerializer,
     PublicHoldSerializer,
@@ -28,6 +31,8 @@ from scheduling.models import Appointment
 from scheduling.statuses import BookingSource
 from shops.durations import ServiceNotOffered
 from shops.models import Service, Shop, Staff, StaffService
+
+logger = logging.getLogger(__name__)
 
 
 class PublicViewMixin:
@@ -199,6 +204,21 @@ class HoldCreateView(PublicViewMixin, APIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
+        # Slice 6. The push happens *after* the hold exists, never instead of
+        # it: the slot has to be genuinely gone before a client is asked for
+        # money, and a push against a slot we did not manage to hold is a
+        # charge for nothing.
+        #
+        # A refused or unavailable push is **not** an error response. The hold
+        # is real, the client is about to land on the waiting screen, and the
+        # payment's own state is what that screen renders — including "we could
+        # not reach M-Pesa, here is *334#". Turning it into a 502 would throw
+        # away a live hold the client can still pay for.
+        try:
+            initiate_push(appointment)
+        except PushRefused as exc:
+            logger.warning("stk push refused for hold %s: %s", appointment.pk, exc.reason)
+
         return Response(PublicHoldSerializer(appointment).data, status=status.HTTP_201_CREATED)
 
 
@@ -211,7 +231,21 @@ class HoldDetailView(PublicViewMixin, APIView):
 
     Not shop-scoped in the URL, because the client following a link from the
     confirm screen has an appointment id and no reason to also carry a slug.
+
+    **Its own throttle scope, and a loose one.** Slice 6 made this the polled
+    endpoint: the screen rewrites itself when money moved in a different app
+    reaches a server the client cannot see, so it asks every three seconds for
+    the life of the hold and every second past zero. That is ~180 requests for
+    one booking, against a `public-read` ceiling of 240/hour shared with the
+    shop, service, staff and availability reads. Two clients behind one
+    carrier-grade NAT address — which is most of Safaricom — would 429 each
+    other mid-payment, and a 429 here freezes the STK screen on "check your
+    phone" forever. The per-phone limits in `scheduling/abuse.py` are what
+    actually bound hold abuse; this reads one unguessable id and returns only
+    what its holder already sent.
     """
+
+    throttle_scope = "hold-read"
 
     def get(self, request, hold_id):
         return Response(PublicHoldSerializer(self.get_hold(hold_id)).data)
@@ -241,4 +275,43 @@ class HoldReleaseView(HoldDetailView):
     def post(self, request, hold_id):
         appointment = self.get_hold(hold_id)
         release_hold(appointment, expired=False)
+        return Response(PublicHoldSerializer(appointment).data)
+
+
+class HoldResendView(HoldDetailView):
+    """`POST /api/public/v1/holds/<id>/resend/` — screen 5's "Resend the prompt".
+
+    The design draws this because the STK push often does not arrive, and a
+    client staring at a dark screen with no way to try again abandons the
+    booking. Everything that bounds it lives in `payments/stk.resend_push`:
+    a per-appointment count, a minimum interval, and the grace ceiling — which
+    it cannot push out, because the ceiling is derived from a timestamp nothing
+    writes.
+
+    A refusal is a 429 with a sentence and, where it applies, a `Retry-After`.
+    The client stays on the same screen either way; nothing about the hold
+    changes.
+    """
+
+    throttle_scope = "stk-resend"
+
+    def post(self, request, hold_id):
+        appointment = self.get_hold(hold_id)
+        try:
+            resend_push(appointment)
+        except PushRefused as exc:
+            # `retry_after` is in the **body** as well as the header. The header
+            # is the correct HTTP answer and an integrating third party will
+            # read it (CLAUDE.md §1); the browser client cannot, because `fetch`
+            # in a cross-origin widget sees no header it was not allowed to, and
+            # `booking-core`'s transport keeps only the parsed body. A countdown
+            # the client cannot render is a client that retries immediately.
+            body = {"detail": str(exc), "reason": exc.reason}
+            if exc.retry_after:
+                body["retry_after"] = exc.retry_after
+            response = Response(body, status=status.HTTP_429_TOO_MANY_REQUESTS)
+            if exc.retry_after:
+                response["Retry-After"] = str(exc.retry_after)
+            return response
+        appointment.refresh_from_db()
         return Response(PublicHoldSerializer(appointment).data)

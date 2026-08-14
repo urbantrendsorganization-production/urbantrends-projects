@@ -131,3 +131,40 @@ invariant says so* rather than because someone typed 3.
 
 If a future slice needs to change what these assert, that is a conversation, not
 a commit.
+
+## Payments (slice 6)
+
+The five named cases and the machinery under them. These are the tests that
+decide whether a client's deposit is safe, so they are named individually in CI
+rather than swept up by the full run.
+
+- `payments/tests/test_callbacks.py` — the five cases, each as its own test:
+  the late callback that must still confirm, the one that becomes `slotLost`,
+  the callback that never arrives (in `test_reconciliation.py`), the duplicate,
+  and the callback for a booking somebody cancelled on purpose. Plus the
+  hardest one: a duplicate with a **conflicting** result, which is recorded as
+  a discrepancy and **never applied**. Silently applying the later verdict turns
+  a confirmed booking — one the client already has an SMS about — back into an
+  unconfirmed one.
+- `payments/tests/test_grace_window.py` — T_grace. A hold whose STK push is
+  still outstanding is not released the instant its TTL runs out. This is the
+  mechanism that makes `slotLost` rare rather than routine, and the ceiling is
+  derived from `hold_expires_at` rather than stored, so no code path can extend
+  it. Weakening this file means manufacturing the worst state this product has.
+- `payments/tests/test_stk.py` — the row is written before the Daraja call, a
+  timeout is `unknown` and not `push_failed`, and a resend supersedes rather
+  than duplicates. The superseded push can still be answered, which is why the
+  duplicate rule is "first *result* wins" and not "first terminal state wins".
+- `payments/tests/test_reconciliation.py` — we do not wait to be told what
+  happened to money; we ask. A separate mechanism from the hold sweep, on its
+  own schedule, because one job doing both means either a slow M-Pesa holds the
+  calendar hostage or a busy calendar skips a payment.
+- `payments/tests/test_system_transition_guard.py` — `pending_payment ->
+  confirmed` is the edge no staff member may have, because confirming an unpaid
+  hold is what a *paid callback* does. Parsed from the source, not grepped.
+- `payments/tests/test_sms_never_blocks_a_callback.py` — a slow SMS gateway
+  must not hold a row lock on money, because a slow 200 to Safaricom is a
+  Safaricom retry, and that turns a slow third party into a payment outage.
+- `payments/tests/test_support_code.py` — the code is searchable in Django
+  admin **in this slice**. The owner dashboard is slice 9, and a code nobody can
+  look up is decoration on the one screen where the client is already unhappy.
