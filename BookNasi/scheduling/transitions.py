@@ -44,6 +44,7 @@ collide. `finished_at` still records the truth, `duration_snapshot` still holds
 what was booked, and telling the next client is slice 8's job.
 """
 
+import logging
 from datetime import timedelta
 from enum import Enum
 
@@ -52,9 +53,12 @@ from django.utils import timezone
 
 from scheduling.booking import order_bookings_for, slot_taken_on_conflict
 from scheduling.models import RANGE_BOUNDS, Appointment
-from scheduling.statuses import ACTIVE_STATUSES, AppointmentStatus
+from scheduling.statuses import ACTIVE_STATUSES, AppointmentStatus, BookingSource
 
 S = AppointmentStatus
+
+
+logger = logging.getLogger(__name__)
 
 
 class Actor(Enum):
@@ -277,7 +281,64 @@ def apply_transition(appointment, to_status, *, now=None, expired_hold=False, ac
 
         cancel_scheduled_release(queued_release, appointment_id=appointment.pk)
 
+    # Slice 8. Reminders follow the status, and this is the only place status
+    # moves — so hooking here means a confirmation path added later cannot
+    # forget to arm them, and a cancellation path added later cannot forget to
+    # kill them. CLAUDE.md §6: a client reminded about a booking that no longer
+    # exists is a trust bug.
+    #
+    # After the commit, and never allowed to fail the transition. A messaging
+    # problem must not roll back a booking that is now confirmed — the same rule
+    # `payments/callbacks.py` applies to the confirmation SMS.
+    _after_transition(appointment, to_status, now=now)
+
     return appointment
+
+
+def _after_transition(appointment, to_status, *, now=None):
+    """Everything the messaging layer owes this status change.
+
+    One hook rather than several, because this is the only place status moves
+    and a second hook somewhere else is a second place to forget.
+    """
+    from notifications import reminders
+
+    try:
+        if to_status in ACTIVE_STATUSES:
+            reminders.ensure_scheduled(appointment, now=now)
+        else:
+            # Cancelled, completed, no-show. Nothing left to remind about.
+            reminders.cancel_for(appointment)
+
+        if to_status == S.NO_SHOW:
+            _tell_them_they_missed_it(appointment)
+    except Exception:  # noqa: BLE001 — see above
+        logger.exception("could not run post-transition messaging for %s", appointment.pk)
+
+
+def _tell_them_they_missed_it(appointment):
+    """The forfeit, said out loud. Slice 8.
+
+    §12 requires the refund terms to be readable *before* payment, and they are
+    — but a client who has just lost KES 875 to a rule they read three weeks ago
+    is owed the sentence saying so. A forfeit nobody is told about is exactly
+    the support call that policy was written to prevent.
+
+    Only when money was actually kept. A no-show on a booking that never
+    completed its push has nothing to report, and "you missed it and we kept
+    KES 0" is a worse message than none.
+    """
+    from notifications.service import queue_message
+    from notifications.templates import Template
+    from scheduling.lifecycle import is_forfeited, paid_deposit_for
+
+    if appointment.source != BookingSource.ONLINE or not is_forfeited(appointment):
+        return
+    queue_message(
+        appointment,
+        Template.NO_SHOW,
+        variables_extra={"paid": f"{paid_deposit_for(appointment):,}"},
+    )
 
 
 def blocking_appointment_for(appointment):

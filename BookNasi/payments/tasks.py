@@ -88,3 +88,21 @@ def escalate_stale_payments():
             settings.PAYMENT_ESCALATE_AFTER,
         )
     return len(stale)
+
+
+@shared_task(name="payments.expire_lapsed_credits")
+def expire_lapsed_credits():
+    """Flip lapsed credits to EXPIRED. Bookkeeping, not enforcement.
+
+    `Credit.is_spendable` already reads `expires_at` rather than the state
+    column, so a credit that lapses between sweeps cannot be spent — this
+    cannot lose a client money by running late. What it buys is the ability to
+    tell "expired unused" from "still open", which is the number that tells a
+    shop whether its credit policy is doing anything.
+    """
+    from payments.credit import expire_lapsed
+
+    count = expire_lapsed()
+    if count:
+        logger.info("expired %s lapsed credit(s)", count)
+    return count

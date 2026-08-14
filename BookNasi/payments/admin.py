@@ -203,13 +203,25 @@ def mark_resolved(modeladmin, request, queryset):
     if "apply" in request.POST:
         form = ResolveForm(request.POST)
         if form.is_valid():
+            # Captured before the update, because `refund_due_at` is what says
+            # this row owed the client money and the client is the one who has
+            # been waiting without being told anything.
+            owed = list(
+                queryset.filter(refund_due_at__isnull=False).select_related(
+                    "appointment", "appointment__shop", "appointment__client"
+                )
+            )
             count = queryset.update(
                 queue_resolved_at=timezone.now(),
                 queue_resolved_by=request.user,
                 queue_note=form.cleaned_data["note"],
             )
+            told = _tell_them_the_refund_went(owed)
             modeladmin.message_user(
-                request, f"{count} payment(s) marked as dealt with.", messages.SUCCESS
+                request,
+                f"{count} payment(s) marked as dealt with."
+                + (f" {told} client(s) told the refund is on its way." if told else ""),
+                messages.SUCCESS,
             )
             return redirect(request.get_full_path())
     else:
@@ -390,3 +402,34 @@ class CreditRedemptionAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+def _tell_them_the_refund_went(payments):
+    """Close the loop on a refund the shop has just sent. Slice 8.
+
+    `scheduling.lifecycle.cancel` records what is owed and can do no more —
+    we are not the merchant, so the transfer is the shop's to make and we never
+    learn that it happened. Marking the queue row done *is* that signal, and it
+    is the only one there is.
+
+    Without this the client's last word from us is "the shop will refund you",
+    with no closing line and no recourse but to ring and ask.
+    """
+    from notifications.service import queue_message
+    from notifications.templates import Template
+    from scheduling.lifecycle import paid_deposit_for
+    from scheduling.statuses import BookingSource
+
+    told = 0
+    for payment in payments:
+        appointment = payment.appointment
+        if appointment.source != BookingSource.ONLINE or appointment.client_id is None:
+            continue
+        sent = queue_message(
+            appointment,
+            Template.REFUND_SENT,
+            variables_extra={"paid": f"{paid_deposit_for(appointment):,}"},
+        )
+        if sent is not None:
+            told += 1
+    return told

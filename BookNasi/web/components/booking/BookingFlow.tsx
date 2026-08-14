@@ -831,10 +831,14 @@ export function Paid({ state }: { state: BookingState }) {
           fontSize: "var(--bn-text-body-sm-size)",
         }}
       >
-        {/* Trimmed to what slice 8 will actually send. The design's footnote
-            promised a reminder schedule that does not exist yet, and a
-            promise the product cannot keep is worse than no promise. */}
-        We've sent you a confirmation by SMS.
+        {/* Slice 6 trimmed this to "a confirmation", because the design's
+            footnote promised a reminder schedule that did not exist and a
+            promise the product cannot keep is worse than no promise. Slice 8
+            built the schedule, so the promise is now one we keep — and it is
+            deliberately vague about *how many*, because a booking made two
+            hours out gets one reminder and one made next week gets two. */}
+        We&apos;ve sent you a confirmation by SMS, and we&apos;ll remind you before
+        your appointment.
       </p>
     </section>
   );

@@ -10,7 +10,7 @@ import pytest
 
 from clients.models import Client
 from core.managers import CrossTenantQueryError
-from notifications.models import Message
+from notifications.models import Message, Reminder
 from orgs.models import Membership, StaffInvite
 from payments.models import Credit, CreditRedemption, Payment, PaymentMove
 from scheduling.models import Appointment
@@ -57,6 +57,9 @@ ORG_SCOPED_MODELS = [
     # exactly the kind of row a cross-tenant read must never reach.
     Credit,
     CreditRedemption,
+    # slice 8. A reminder names a client and a time and belongs to one shop's
+    # day; a cross-tenant read of these is a list of who is coming in and when.
+    Reminder,
 ]
 
 

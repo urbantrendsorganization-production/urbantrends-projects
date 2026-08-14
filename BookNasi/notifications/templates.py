@@ -56,6 +56,20 @@ class Template(models.TextChoices):
     CANCELLED_CREDIT = "cancelled_credit", "Cancelled, deposit became credit"
     CANCELLED_PLAIN = "cancelled_plain", "Cancelled, nothing had been taken"
     RESCHEDULED = "rescheduled", "Booking moved"
+    # Slice 8, the scheduled half. Two reminders because §6 says two and prices
+    # three messages a booking; the T-24h is simply never armed when its moment
+    # has already passed, which is most of why §8's "one reminder" reading and
+    # §6's disagreed. See `notifications/reminders.py`.
+    REMINDER_24H = "reminder_24h", "Reminder, 24 hours before"
+    REMINDER_2H = "reminder_2h", "Reminder, 2 hours before"
+    #: They did not come, and the deposit was kept. §12 requires the terms to be
+    #: visible before payment; a forfeit nobody is told about afterwards is the
+    #: support call that policy was written to prevent.
+    NO_SHOW = "no_show", "Missed appointment, deposit kept"
+    #: Sent when a shop marks a refund done in the exception queue. Without it,
+    #: "the shop will refund you" has no closing line and the client's only
+    #: recourse is to ring and ask.
+    REFUND_SENT = "refund_sent", "Refund sent by the shop"
 
 
 #: Sent at most once per appointment. Enforced by a unique constraint on
@@ -79,7 +93,19 @@ ONE_SHOT = (
     Template.CANCELLED_REFUND,
     Template.CANCELLED_CREDIT,
     Template.CANCELLED_PLAIN,
+    # Slice 8. Both fire once per booking and never again: you can only miss an
+    # appointment once, and a shop refunding twice is a bug we should not be
+    # papering over with a second SMS.
+    Template.NO_SHOW,
+    Template.REFUND_SENT,
 )
+
+#: Deliberately outside `ONE_SHOT`, and the reason the constraint was partial
+#: from the start — see `notifications/migrations/0001_initial.py`. A booking
+#: rescheduled after its 24-hour reminder has already gone needs a fresh one for
+#: its new date, so uniqueness lives on `Reminder` (one per appointment per
+#: kind, moved rather than duplicated) instead of on the message log.
+SCHEDULED = (Template.REMINDER_24H, Template.REMINDER_2H)
 
 
 def _confirmed(v):
@@ -144,8 +170,45 @@ def _rescheduled(v):
     )
 
 
+def _reminder_24h(v):
+    # Leads with the time, names the money still owed, and carries the manage
+    # link — because the most useful thing a 24-hour reminder can produce is a
+    # cancellation while the slot is still resellable, not a guilty client.
+    return (
+        f"Tomorrow: {v['when']} with {v['staff']} at {v['shop']}. {v['service']}."
+        + (f" Balance KES {v['balance']} at the shop." if v.get("balance") else "")
+        + f" Need to change it? {v['link']}"
+    )
+
+
+def _reminder_2h(v):
+    # Shorter. At two hours out the client is deciding whether to set off, and
+    # the only things that help are the time and where to ring.
+    return (
+        f"In 2 hours: {v['when']} with {v['staff']} at {v['shop']}. Running late? {v['shop_phone']}"
+    )
+
+
+def _no_show(v):
+    return (
+        f"You missed {v['when']} with {v['staff']} at {v['shop']}, and the "
+        f"KES {v['paid']} deposit was kept. Book again any time: {v['link']}"
+    )
+
+
+def _refund_sent(v):
+    return (
+        f"{v['shop']} has sent your KES {v['paid']} refund for {v['when']}. "
+        f"It should reach your M-Pesa shortly. Questions: {v['shop_phone']}"
+    )
+
+
 RENDERERS = {
     Template.BOOKING_CONFIRMED: _confirmed,
+    Template.REMINDER_24H: _reminder_24h,
+    Template.REMINDER_2H: _reminder_2h,
+    Template.NO_SHOW: _no_show,
+    Template.REFUND_SENT: _refund_sent,
     Template.HOLD_RELEASED: _released,
     Template.SLOT_LOST: _slot_lost,
     Template.CANCELLED_REFUND: _cancelled_refund,

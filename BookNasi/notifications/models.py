@@ -68,3 +68,11 @@ class Message(OrgDerivedModel):
 
     def __str__(self):
         return f"{self.get_template_display()} → {self.to} ({self.status})"
+
+
+# Slice 8's `Reminder` lives in `notifications/reminders.py`, next to the
+# scheduling logic that is the only reason it has the shape it does. Imported
+# here so the app registry finds it — Django discovers models through
+# `app.models`, and a model in a sibling module is invisible until something
+# pulls it in.
+from notifications.reminders import Reminder, ReminderKind  # noqa: E402,F401

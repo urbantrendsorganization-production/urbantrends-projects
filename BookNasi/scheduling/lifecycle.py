@@ -352,6 +352,21 @@ def reschedule(appointment, *, starts_at, staff=None, now=None):
     # the one place that knows both, so it drops the old staff-day explicitly.
     _invalidate_vacated(previous_staff_id, previous_start, previous_end)
 
+    # Slice 8. A move does not change `status`, so the transition hook that
+    # normally syncs reminders never fires — and a booking moved from Friday to
+    # Tuesday would otherwise keep Friday's reminders. §6 calls that exact thing
+    # a trust bug. `ensure_scheduled` moves the existing rows rather than adding
+    # new ones, and clears `sent_at` so the new date gets its own 24-hour notice
+    # even when the old one already went.
+    from notifications import reminders
+
+    try:
+        reminders.ensure_scheduled(appointment, now=now)
+    except Exception:  # noqa: BLE001 — a messaging failure must not undo a move
+        import logging
+
+        logging.getLogger(__name__).exception("could not re-arm reminders for %s", appointment.pk)
+
     _tell_them_it_moved(appointment)
     return appointment
 

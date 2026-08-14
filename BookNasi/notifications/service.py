@@ -97,7 +97,9 @@ def booking_link(appointment):
     return f"{base}/booking/{appointment.pk}"
 
 
-def queue_message(appointment, template, *, payment=None, credit=None, to=None):
+def queue_message(
+    appointment, template, *, payment=None, credit=None, to=None, variables_extra=None
+):
     """Write the row and arrange for it to be sent after this commits.
 
     Returns the `Message`, or None when this one-shot has already been sent.
@@ -113,7 +115,14 @@ def queue_message(appointment, template, *, payment=None, credit=None, to=None):
         appointment=appointment,
         template=template,
         to=normalize_phone(number),
-        variables=variables_for(appointment, template, payment=payment, credit=credit),
+        variables={
+            **variables_for(appointment, template, payment=payment, credit=credit),
+            # Whatever the caller knows that this module does not. Slice 8's
+            # no-show and refund messages both name a figure that comes from
+            # `lifecycle.paid_deposit_for`, which reads payments *and* redeemed
+            # credit — arithmetic that belongs there and not here.
+            **(variables_extra or {}),
+        },
     )
     try:
         with transaction.atomic():

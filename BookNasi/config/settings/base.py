@@ -107,6 +107,27 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 3600.0,
         "options": {"expires": 3500.0},
     },
+    # Slice 8. The correctness half of reminders, beside the per-appointment
+    # `eta` tasks that provide the timeliness — the same split, for the same
+    # reason, as the hold sweep above. Five minutes rather than one: a reminder
+    # arriving five minutes late is a reminder, whereas a slot released five
+    # minutes late is a slot somebody could not book.
+    #
+    # It also arms reminders for confirmed bookings that have none, which is
+    # what keeps a forgotten call site to a delay instead of a silence.
+    "send-due-reminders": {
+        "task": "notifications.sweep_due_reminders",
+        "schedule": 300.0,
+        "options": {"expires": 290.0},
+    },
+    # Credit that lapsed. Bookkeeping only — `Credit.is_spendable` already reads
+    # the timestamp, so this cannot let a client spend money the policy says is
+    # gone. Hourly is ample for a 60-day window.
+    "expire-lapsed-credits": {
+        "task": "payments.expire_lapsed_credits",
+        "schedule": 3600.0,
+        "options": {"expires": 3500.0},
+    },
 }
 
 AUTH_USER_MODEL = "accounts.User"

@@ -132,6 +132,12 @@ Never log full M-Pesa payloads with phone numbers at INFO. Never commit shortcod
 
 - Confirmation on booking, reminder at T-24h and T-2h, cancellation notice.
 - Reminders are Celery tasks keyed to the appointment. **Cancel the task when the appointment is cancelled** — clients getting reminded about appointments that no longer exist is a trust bug, not a cosmetic one.
+
+  Built at slice 8. This line and §8's "confirmation + one reminder" disagreed; settled in favour of two, because this section's own cost arithmetic prices three messages a booking. The qualification that nearly reconciles them: **a reminder whose moment has already passed is never armed**, so a booking made six hours out costs one reminder and one made ninety minutes out costs none. They do different jobs — T-24h is the last moment a cancellation is refundable rather than credit under §12, so it frees a resellable slot; T-2h is the one that stops somebody simply forgetting.
+
+  Two mechanisms, as with hold release: an `eta` task for timeliness and a five-minute Beat sweep for correctness. Unlike hold release, the `eta` is armed only inside a one-hour horizon — a Celery `eta` weeks out is a promise held in a worker's memory for weeks, lost on every restart, and a reminder five minutes late is still a reminder. The sweep also arms reminders for confirmed bookings that have none, so a confirmation path that forgets to call in costs a delay rather than a silence.
+
+  Nothing is sent before **07:00 EAT**. Only the T-2h can land earlier, and it shifts forward rather than being dropped.
 - Messaging cost is a real line item (300 bookings × 3 messages = 900/month on the cheapest tier). Keep the provider behind an interface so SMS → WhatsApp Business API is a swap, not a rewrite.
 
 ---
@@ -153,7 +159,7 @@ Build the owner dashboard, but **never at the cost of the staff view**. If staff
 - Availability engine with the exclusion constraint
 - Walk-in entry, staff day view
 - M-Pesa deposit + idempotent callback handling
-- SMS/WhatsApp confirmation + one reminder
+- SMS/WhatsApp confirmation + reminders (two, both conditional — see §6, which this line originally contradicted)
 - Owner dashboard: today's bookings, no-show rate, revenue per staff
 - Embeddable widget + public API for `/site`
 - Single client-initiated reschedule: moving one booking to another time, from the SMS manage link

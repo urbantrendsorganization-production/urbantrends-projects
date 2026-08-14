@@ -274,17 +274,21 @@ test("the paid screen leads with the M-Pesa receipt", () => {
   assert.ok(html.indexOf("SJ42K19XQ7") < html.indexOf("Knotless braids"));
 });
 
-test("the paid screen promises only the SMS slice 8 will actually send", () => {
-  // The design's footnote described a reminder schedule that does not exist
-  // yet. A promise the product cannot keep is worse than no promise.
+test("the paid screen promises exactly what slice 8 sends, and no schedule", () => {
+  // Slice 6 refused to mention reminders at all, because none existed. Slice 8
+  // built them, so the promise is now keepable — but it must stay vague about
+  // the count: a booking made two hours out gets one reminder and one made next
+  // week gets two, and naming a schedule would make the shorter case a broken
+  // promise. See `notifications/reminders.py`.
   const paid = paymentView({ state: "succeeded", push_outstanding: false, mpesa_receipt: "SJ1" });
   const html = readable(
     renderToStaticMarkup(<Paid state={stateWith(holdWith(paid, { status: "confirmed" }), "paid")} />)
   );
 
   assert.ok(html.includes("confirmation by SMS"));
-  assert.ok(!/remind/i.test(html), "reminders are slice 8 and must not be promised here");
-  assert.ok(!/24 hours before|2 hours before/i.test(html));
+  assert.ok(/remind you before/i.test(html), "the reminder promise is now one we keep");
+  assert.ok(!/24 hours before|2 hours before/i.test(html), "never a specific schedule");
+  assert.ok(!/two reminders|2 reminders/i.test(html));
 });
 
 test("the failure screen names the reason and offers no deposit-free detour", () => {

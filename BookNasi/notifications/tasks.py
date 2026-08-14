@@ -107,3 +107,67 @@ def deliver_message(self, message_id):
         self.retry(countdown=RETRY_COUNTDOWN_SECONDS, max_retries=MAX_ATTEMPTS - 1, throw=False)
 
     return message.status
+
+
+# ------------------------------------------------------ slice 8: reminders
+
+
+@shared_task(name="notifications.send_reminder")
+def send_reminder(reminder_id):
+    """Fire one reminder. Scheduled with an `eta` at its own `send_at`.
+
+    For **timeliness**. `sweep_due_reminders` below is for correctness, and the
+    split is the same one `scheduling/tasks.py` makes for hold release, for the
+    same reason: an `eta` task is a promise held in one broker, and brokers
+    restart.
+
+    Re-reads everything, so it is harmless when the booking was cancelled,
+    moved, completed or already reminded in the meantime — which is the ordinary
+    case rather than the exception.
+    """
+    from notifications.reminders import Reminder, send
+
+    reminder = (
+        Reminder.objects.unscoped()
+        .select_related("appointment", "appointment__shop", "appointment__staff")
+        .filter(pk=reminder_id)
+        .first()
+    )
+    if reminder is None:
+        # Cancelled, or the booking was deleted. Safe to lose, by design.
+        return "gone"
+    return send(reminder)
+
+
+@shared_task(name="notifications.sweep_due_reminders")
+def sweep_due_reminders():
+    """Everything overdue, plus anything that was never armed.
+
+    The correctness half. Two jobs, and the second is the one that matters:
+
+    1. Send reminders whose `eta` task was lost with its broker.
+    2. Hand an `eta` task to reminders coming inside `ETA_HORIZON`, which is
+       what lets far-future reminders exist as rows rather than as thousands of
+       long-lived promises in a worker.
+    3. **Arm reminders for confirmed bookings that have none.** Every
+       confirmation path is supposed to call `ensure_scheduled`, and eventually
+       one will not — a new endpoint, an import, a fix run from a shell. This
+       makes that a delay of one sweep rather than a client nobody reminds.
+    """
+    from notifications.reminders import arm_imminent, backfill_missing, due_reminders, send
+
+    results = {"sent": 0, "dropped": 0, "armed": 0, "handed-to-eta": 0}
+    for reminder in due_reminders():
+        outcome = send(reminder)
+        if outcome == "sent":
+            results["sent"] += 1
+        elif outcome == "no-longer-wanted":
+            results["dropped"] += 1
+
+    results["armed"] = backfill_missing()
+    # Reminders that have just come inside `ETA_HORIZON` get their task now, so
+    # the final hour is precise without the broker holding weeks of promises.
+    results["handed-to-eta"] = arm_imminent()
+    if any(results.values()):
+        logger.info("reminder sweep: %s", results)
+    return results
