@@ -145,16 +145,30 @@ REST_FRAMEWORK = {
     # carrier-grade NAT, so a per-IP limit tight enough to stop a determined
     # script would block a neighbourhood on a Saturday morning. The per-phone
     # limits in that module are what actually bound the exposure.
+    # One scope per public endpoint, never a shared budget. The rule and the two
+    # slices that taught it to us are in `scheduling/abuse.py`; the short version
+    # is that under carrier-grade NAT a shared scope lets one client's traffic
+    # exhaust the allowance of every stranger on their operator's NAT pool, and
+    # the 429 surfaces on whichever endpoint they touch next.
     "DEFAULT_THROTTLE_RATES": {
-        "public-read": "240/hour",
-        # The polled endpoint, on its own budget. One booking spends ~180
-        # requests here over a three-minute hold plus its grace window, so
-        # leaving it inside `public-read` meant a single client could exhaust
-        # the shared ceiling and a second client behind the same carrier-grade
-        # NAT address would be 429'd in the middle of paying. See
-        # `public_api.views.HoldDetailView`.
+        # The reads, split by how hard each is actually used. Availability is
+        # re-fetched on every date and stylist change; the shop, service and
+        # staff lists are fetched about once per booking.
+        "shop-read": "120/hour",
+        "service-read": "120/hour",
+        "staff-read": "120/hour",
+        "availability-read": "600/hour",
+        # The polled endpoint. One booking spends ~180 requests here over a
+        # three-minute hold plus its grace window, so a shared ceiling meant a
+        # single client could exhaust it and a second client behind the same
+        # NAT address would be 429'd in the middle of paying — and a 429 there
+        # freezes the STK screen with the money already gone.
         "hold-read": "1200/hour",
         "hold-create": "12/hour",
+        # Separate from `hold-create` on purpose. Cancelling is free — see
+        # `HoldReleaseView` — so the button a client is *meant* to press must
+        # not be rate-limited by how many holds they have taken.
+        "hold-release": "30/hour",
         # Resend is bounded per appointment in `payments/stk.py`, which is the
         # real control. This is the same crude per-IP ceiling as above, and is
         # loose for the same carrier-grade-NAT reason.

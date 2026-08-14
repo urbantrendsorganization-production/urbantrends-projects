@@ -119,7 +119,14 @@ class PublicAvailabilityView(PublicViewMixin, AvailabilityForServiceMixin, APIVi
     A deposit-free service 404s here exactly as it is absent from the public
     service list — CLAUDE.md §5, enforced at the API rather than the UI. Without
     a payment there is no phone verification, so there is nothing to offer.
+
+    Its own throttle scope, like every public endpoint — the rule and its
+    history are in `scheduling/abuse.py`. This one is re-fetched on every date
+    change and every stylist change, so it is the busiest read in the flow and
+    the worst possible thing to share a budget with.
     """
+
+    throttle_scope = "availability-read"
 
     def get(self, request, slug, service_id):
         shop = self.get_shop()

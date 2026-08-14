@@ -38,9 +38,20 @@ logger = logging.getLogger(__name__)
 class PublicViewMixin:
     permission_classes = [AllowAny]
     authentication_classes = []
-    #: Crude per-IP ceiling. Explicitly not the control on hold abuse — see the
-    #: long note in `scheduling/abuse.py` about carrier-grade NAT.
-    throttle_scope = "public-read"
+    #: **No default, on purpose.** Every public endpoint declares its own
+    #: throttle scope — see the rule and its two-slice history in
+    #: `scheduling/abuse.py`. A shared default is not "these endpoints together
+    #: get N/hour"; under carrier-grade NAT it is "one client's traffic can
+    #: exhaust the allowance of every stranger on their operator's NAT pool",
+    #: and the 429 lands on whichever endpoint they touch next. Inheriting a
+    #: scope by accident is exactly how `hold-detail`'s 3-second poll ended up
+    #: starving the shop and availability reads in slice 6.
+    #:
+    #: `None` here means DRF applies no scoped rate at all, so forgetting one is
+    #: an unthrottled endpoint rather than a silently shared budget. That is the
+    #: safer failure of the two — and `core/tests/test_throttle_scopes.py`
+    #: refuses to let either ship.
+    throttle_scope = None
 
     def get_shop(self):
         # `.unscoped()` is correct here and is the reason it is greppable: this
@@ -56,11 +67,14 @@ class PublicViewMixin:
 
 
 class PublicShopDetailView(PublicViewMixin, APIView):
+    throttle_scope = "shop-read"
+
     def get(self, request, slug):
         return Response(PublicShopSerializer(self.get_shop()).data)
 
 
 class PublicServiceListView(PublicViewMixin, generics.ListAPIView):
+    throttle_scope = "service-read"
     serializer_class = PublicServiceSerializer
     pagination_class = None
 
@@ -85,6 +99,7 @@ class PublicStaffListView(PublicViewMixin, generics.ListAPIView):
     They are resolved here through the same function slice 3 will use.
     """
 
+    throttle_scope = "staff-read"
     serializer_class = PublicStaffSerializer
     pagination_class = None
 
@@ -270,7 +285,7 @@ class HoldReleaseView(HoldDetailView):
     minutes.
     """
 
-    throttle_scope = "hold-create"
+    throttle_scope = "hold-release"
 
     def post(self, request, hold_id):
         appointment = self.get_hold(hold_id)
