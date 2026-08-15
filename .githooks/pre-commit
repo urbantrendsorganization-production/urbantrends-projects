@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""Nothing real gets committed to BookNasi's `.env.example`. CLAUDE.md §11.
+
+Hooks live at one path per clone, so this sits at the repo root and filters to
+`BookNasi/` itself — the same shape as `.github/workflows/booknasi.yml`, which
+is at the root with path filters for the same reason.
+
+## Why it is not "reject any line with content after the ="
+
+That is the rule as it was asked for, and implemented literally it rejects
+about twenty lines of the current file: `DEBUG=1`, `LOG_LEVEL=INFO`,
+`MPESA_BASE_URL=https://sandbox.safaricom.co.ke`, every timing knob in the
+payments block. Those values are the whole reason the file is worth reading —
+it documents the defaults a shortcode's behaviour may need turned. A hook that
+fails on HEAD is a hook whose first use is `--no-verify`, and a hook that is
+routinely bypassed protects nothing.
+
+So the rule is inverted to the thing it was protecting: a **secret** may not
+have a value. Non-secret defaults stay, because they are documentation.
+
+## Why it is scoped to BookNasi and not the whole repo
+
+`niche-marketplace` and `onboarding-kit` deliberately ship obvious placeholders
+(`DJANGO_SECRET_KEY=insecure-dev-key-change-me`,
+`JWT_SECRET=dev-insecure-secret-change-me-at-least-32-chars`). That is a
+different convention, not a defect, and imposing BookNasi's stricter one on
+them would block unrelated work with a rule nobody agreed to over there.
+
+## Why it reads the index rather than the working tree
+
+`git show :path` is what is actually about to be committed. Checking the file
+on disk lets a staged secret through whenever the worktree has moved on past
+it, which is exactly the case where somebody is mid-cleanup and least likely to
+notice.
+"""
+
+import re
+import subprocess
+import sys
+
+#: Key names whose value must be empty. Matched as substrings, case-insensitively,
+#: so `MPESA_CONSUMER_SECRET`, `SMS_API_KEY` and `DJANGO_SECRET_KEY` are all caught
+#: without naming each one — a new secret arrives already covered, which is the
+#: half a hand-written list of variables always gets wrong.
+SECRET_NAME = re.compile(
+    r"SECRET|PASSKEY|PASSWORD|CREDENTIAL|_KEY\b|^KEY\b|TOKEN|SHORTCODE|TILL_NUMBER",
+    re.IGNORECASE,
+)
+
+#: A password sitting inside a connection string. `postgres://user:pw@host/db`
+#: has no key name for the rule above to match on, so it would otherwise be the
+#: one shape that walks straight through.
+URL_CREDENTIAL = re.compile(r"^[a-z][a-z0-9+.-]*://[^/\s:@]+:([^/\s@]+)@([^/\s:]+)", re.IGNORECASE)
+
+#: Hosts where an embedded password is a local default and not a leak.
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "postgres", "redis", "db", "host.docker.internal"}
+
+#: The backstop, for a key whose name nobody anticipated. Deliberately narrow:
+#: 32+ characters, one token, letters and digits both, no dots and no slashes.
+#: A Daraja consumer key (32-40 alphanumeric) and a passkey (64 hex) both trip
+#: it; every value currently in the file — dotted module paths, URLs, integers,
+#: `CustomerPayBillOnline` — misses it on at least two counts.
+def looks_like_a_credential(value: str) -> bool:
+    if len(value) < 32 or re.search(r"[\s./\\]", value):
+        return False
+    return bool(re.search(r"[A-Za-z]", value)) and bool(re.search(r"\d", value))
+
+
+def staged_example_files() -> list[str]:
+    out = subprocess.run(
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    return [
+        path
+        for path in out
+        if path.startswith("BookNasi/") and re.search(r"(^|/)\.env(\..*)?\.example$", path)
+    ]
+
+
+def staged_content(path: str) -> str:
+    return subprocess.run(
+        ["git", "show", f":{path}"], capture_output=True, text=True, check=True
+    ).stdout
+
+
+def complaints_in(path: str, text: str) -> list[str]:
+    found = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, raw = stripped.partition("=")
+        key, value = key.strip(), raw.strip()
+        if not value:
+            continue
+
+        where = f"{path}:{number}: {key}"
+        if SECRET_NAME.search(key):
+            found.append(f"{where} is a secret and must be left empty.")
+            continue
+
+        url = URL_CREDENTIAL.match(value)
+        if url and url.group(2).lower() not in LOCAL_HOSTS:
+            found.append(f"{where} embeds a password for a non-local host ({url.group(2)}).")
+            continue
+
+        if looks_like_a_credential(value):
+            found.append(f"{where} looks like a real credential ({len(value)} chars).")
+    return found
+
+
+def main() -> int:
+    complaints = []
+    for path in staged_example_files():
+        complaints += complaints_in(path, staged_content(path))
+
+    if not complaints:
+        return 0
+
+    print("\nBookNasi: refusing to commit a secret to an example file (CLAUDE.md §11).\n")
+    for complaint in complaints:
+        print(f"  {complaint}")
+    print(
+        "\nLeave the value empty and put the real one in .env, which is gitignored."
+        "\nIf this is a false positive, commit with --no-verify and fix the rule in"
+        "\n.githooks/pre-commit — a hook that cries wolf is worse than no hook.\n"
+    )
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
