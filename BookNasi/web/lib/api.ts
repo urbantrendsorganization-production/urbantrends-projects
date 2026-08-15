@@ -22,7 +22,21 @@
  * took their slot.
  */
 
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+/**
+ * Empty, meaning same-origin, and it should stay that way.
+ *
+ * Every request goes through the rewrite in `next.config.js` in development and
+ * through Caddy in production, so the browser only ever talks to the origin it
+ * loaded the page from. That is not a convenience — it is what makes the
+ * session cookie same-site, CSRF work the way Django expects, and `/api/v1/`
+ * safe to leave without any CORS headers at all.
+ *
+ * The override exists for the case this file cannot serve: something rendering
+ * these components against an API on a genuinely different origin. Setting it
+ * puts every authenticated call back into credentialed cross-origin territory,
+ * where `core/cors.py` will — correctly — refuse it. See `next.config.js`.
+ */
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
 export class ApiError extends Error {
   status: number;
@@ -39,13 +53,55 @@ function readCookie(name: string): string {
   return match ? decodeURIComponent(match[2]) : "";
 }
 
+/**
+ * The CSRF cookie, fetched once if the browser does not already have it.
+ *
+ * Django only sets `csrftoken` when something calls `get_token`, which is what
+ * `/api/v1/auth/csrf/` exists to do. That endpoint shipped in slice 1 and
+ * nothing ever called it: every screen so far either read (no token needed) or
+ * was reached by a developer whose browser still had a cookie from a previous
+ * session. A genuinely new visitor — which is every owner signing up — has no
+ * cookie, and their first authenticated write fails.
+ *
+ * Lazy rather than on boot, and this is the deliberate part. The public booking
+ * page is opened cold from a WhatsApp link on 3G, where the design's whole
+ * budget is sixty seconds to a paid deposit; it never writes through this
+ * module, so it must never pay a round trip for a token it will not use. The
+ * cost lands on the first write, where it is one request against an action the
+ * client just chose to take.
+ *
+ * The promise is cached so that two writes racing on page load prime once, and
+ * cleared on failure so a later write can try again rather than inheriting a
+ * dead promise for the life of the tab.
+ */
+let priming: Promise<void> | null = null;
+
+async function ensureCsrfToken(): Promise<void> {
+  if (readCookie("csrftoken")) return;
+  priming ??= fetch(`${API_BASE}/api/v1/auth/csrf/`, { credentials: "include" })
+    .then(() => undefined)
+    .catch((error) => {
+      priming = null;
+      throw error;
+    });
+  // A failure here is not fatal on its own: the request below may still be one
+  // Django does not check a token for, and its own error is a better one to
+  // report than "could not fetch a token".
+  await priming.catch(() => undefined);
+}
+
 async function request(path: string, init: RequestInit = {}) {
   const method = (init.method ?? "GET").toUpperCase();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...((init.headers as Record<string, string>) ?? {}),
   };
-  if (method !== "GET") headers["X-CSRFToken"] = readCookie("csrftoken");
+  if (method !== "GET") {
+    await ensureCsrfToken();
+    // Read after priming, not before: `django.contrib.auth.login` rotates the
+    // token, so the cookie that matters is the one present at send time.
+    headers["X-CSRFToken"] = readCookie("csrftoken");
+  }
 
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
@@ -59,6 +115,23 @@ async function request(path: string, init: RequestInit = {}) {
   if (!response.ok) throw new ApiError(response.status, body);
   return body;
 }
+
+/**
+ * The org-and-shop scope every staff and owner path hangs off, as a function
+ * that takes the rest of the path.
+ *
+ * Curried so the endpoint is a **literal at the point it is requested**:
+ * `shop("/walk-in/options/")` rather than `` `${base}/walk-in/options/` ``
+ * with `base` arriving as a prop from two components away. That is not a style
+ * preference — `core/tests/test_frontend_routes.py` resolves every path the
+ * frontend builds against Django's URLconf, and it cannot resolve a base it
+ * cannot see. A URL assembled from an invisible variable is exactly the shape
+ * that let the manage page ask for `/manage/<token>/` for four slices.
+ */
+export const shopScope =
+  (orgId: string, shopId: string) =>
+  (path: string) =>
+    `/api/v1/orgs/${orgId}/shops/${shopId}${path}`;
 
 export const api = {
   get: (path: string) => request(path),

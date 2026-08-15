@@ -29,7 +29,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { ApiError, api, postWithRetry } from "../../lib/api";
+import { ApiError, api, postWithRetry, shopScope } from "../../lib/api";
 import type { Appointment } from "../../lib/day";
 import { clock, groupByBand, money } from "../../lib/day";
 import { AppointmentDetail } from "./AppointmentDetail";
@@ -52,7 +52,7 @@ type DayResponse = {
 };
 
 export function Today({ orgId, shopId }: { orgId: string; shopId: string }) {
-  const base = `/api/v1/orgs/${orgId}/shops/${shopId}`;
+  const shop = useMemo(() => shopScope(orgId, shopId), [orgId, shopId]);
   const [day, setDay] = useState<DayResponse | null>(null);
   const [drafts, setDrafts] = useState<Appointment[]>([]);
   const [fetchedAt, setFetchedAt] = useState<Date | null>(null);
@@ -67,7 +67,7 @@ export function Today({ orgId, shopId }: { orgId: string; shopId: string }) {
 
   const refresh = useCallback(async () => {
     try {
-      const data = await api.get(`${base}/day/?staff=${scope}`);
+      const data = await api.get(shop(`/day/?staff=${scope}`));
       setDay(data);
       setFetchedAt(new Date());
     } catch {
@@ -75,7 +75,7 @@ export function Today({ orgId, shopId }: { orgId: string; shopId: string }) {
       // on a shop's patchy connection would be noise the staff member learns
       // to ignore, and then misses the one that matters.
     }
-  }, [base, scope]);
+  }, [shop, scope]);
 
   useEffect(() => {
     refresh();
@@ -128,7 +128,7 @@ export function Today({ orgId, shopId }: { orgId: string; shopId: string }) {
   async function transition(appointment: Appointment, status: string) {
     setToast({ tone: "progress", text: "Saving…" });
     try {
-      const updated = await postWithRetry(`${base}/appointments/${appointment.id}/status/`, {
+      const updated = await postWithRetry(shop(`/appointments/${appointment.id}/status/`), {
         status,
       });
       setDay((current) =>
@@ -284,7 +284,7 @@ export function Today({ orgId, shopId }: { orgId: string; shopId: string }) {
                         d.id === appointment.id ? { ...d, pending: "sending" } : d
                       )
                     );
-                    postWithRetry(`${base}/walk-in/`, payload)
+                    postWithRetry(shop("/walk-in/"), payload)
                       .then((saved) => settle(appointment.id, saved))
                       .catch(() => fail(appointment.id, "Still no connection to the shop."));
                   }}
@@ -323,7 +323,7 @@ export function Today({ orgId, shopId }: { orgId: string; shopId: string }) {
 
       {sheetOpen && (
         <WalkInSheet
-          base={base}
+          shop={shop}
           onClose={() => setSheetOpen(false)}
           onOptimistic={(draft) => {
             retryPayloads.current[draft.id] = {
@@ -343,7 +343,7 @@ export function Today({ orgId, shopId }: { orgId: string; shopId: string }) {
 
       {open && (
         <AppointmentDetail
-          base={base}
+          shop={shop}
           appointment={open}
           now={now}
           onClose={() => setOpenId(null)}

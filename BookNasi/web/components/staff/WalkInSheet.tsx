@@ -63,13 +63,13 @@ type Option = {
 };
 
 export function WalkInSheet({
-  base,
+  shop,
   onClose,
   onOptimistic,
   onSettled,
   onFailed,
 }: {
-  base: string;
+  shop: (path: string) => string;
   onClose: () => void;
   onOptimistic: (draft: any) => void;
   onSettled: (draftId: string, appointment: any) => void;
@@ -89,13 +89,13 @@ export function WalkInSheet({
 
   useEffect(() => {
     api
-      .get(`${base}/walk-in/options/`)
+      .get(shop("/walk-in/options/"))
       .then((data) => {
         setOptions(data);
         setStaff(data.staff.find((s: StaffChip) => s.is_me) ?? data.staff[0] ?? null);
       })
       .catch(() => setOptions({ top_services: [], other_services: [], staff: [], now: "" }));
-  }, [base]);
+  }, [shop]);
 
   function submit(override?: Partial<Option> & { waiting?: boolean }) {
     if (!service || !staff) return;
@@ -135,7 +135,7 @@ export function WalkInSheet({
     });
     onClose();
 
-    postWithRetry(`${base}/walk-in/`, {
+    postWithRetry(shop("/walk-in/"), {
       service: service.id,
       staff: staffId,
       starts_at: startsAt,

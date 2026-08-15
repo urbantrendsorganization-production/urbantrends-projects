@@ -33,6 +33,23 @@ export interface Transport {
   resendPush(holdId: string): Promise<Hold>;
 }
 
+/**
+ * Where the unauthenticated surface lives. Written once, here.
+ *
+ * Slice 11 found out why that matters. This prefix used to exist only as a
+ * literal inside `httpTransport`, so the two routes that go through the
+ * transport were right and the one screen that hand-rolled its fetches —
+ * `web/app/m/[token]`, the manage link an SMS sends a client — asked for
+ * `/manage/<token>/` and got a 404 on every request, from the day it shipped.
+ * A rendering test cannot see a wrong URL, so nothing noticed.
+ *
+ * Exported rather than duplicated, and `core/tests/test_frontend_routes.py`
+ * now walks every path the frontend builds and resolves it against Django's
+ * real URLconf — because "the prefix is written once" is a convention, and the
+ * test is the thing that holds.
+ */
+export const PUBLIC_API_PREFIX = "/api/public/v1";
+
 export class TransportError extends Error {
   status: number;
   body: any;
@@ -72,7 +89,7 @@ export function httpTransport({
   csrfToken,
   credentials = "include",
 }: HttpTransportOptions): Transport {
-  const root = `${baseUrl.replace(/\/$/, "")}/api/public/v1`;
+  const root = `${baseUrl.replace(/\/$/, "")}${PUBLIC_API_PREFIX}`;
 
   async function call(path: string, init?: { method?: string; body?: unknown }) {
     const method = init?.method ?? "GET";

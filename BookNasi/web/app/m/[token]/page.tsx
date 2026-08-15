@@ -24,7 +24,7 @@
  */
 
 import { INVARIANTS } from "@booknasi/tokens";
-import { money, refundSentence } from "@booknasi/booking-core";
+import { PUBLIC_API_PREFIX, money, refundSentence } from "@booknasi/booking-core";
 import { useCallback, useEffect, useState } from "react";
 
 import { API_BASE } from "../../../lib/api";
@@ -70,8 +70,21 @@ type Booking = {
 
 type Slot = { starts_at: string; local_time: string; staff_id: string; staff_name: string };
 
+/**
+ * The public surface's root, from the one place it is defined.
+ *
+ * This screen used to build `${API_BASE}${path}` and every request 404'd,
+ * because the prefix lived only inside `httpTransport` and the two routes that
+ * go through the transport were the only ones that had it. This page is the
+ * SMS link — the client's cancel and reschedule — so it was the one screen
+ * where the failure mattered most and the one nobody drove by hand. See the
+ * note on `PUBLIC_API_PREFIX`, and `core/tests/test_frontend_routes.py`, which
+ * is what makes the convention hold rather than the comment.
+ */
+const PUBLIC_ROOT = `${API_BASE}${PUBLIC_API_PREFIX}`;
+
 async function api(path: string, init?: RequestInit) {
-  const reply = await fetch(`${API_BASE}${path}`, {
+  const reply = await fetch(`${PUBLIC_ROOT}${path}`, {
     ...init,
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
   });
@@ -107,11 +120,15 @@ export default function ManagePage({ params }: { params: Promise<{ token: string
   if (gone) return <Expired />;
   if (!token || !booking) return <Shell>{null}</Shell>;
 
+  // Takes the whole path, not a fragment to be glued on. Assembling a URL from
+  // a variable the reader cannot see is exactly how this screen shipped without
+  // its `/api/public/v1` prefix for four slices, and it is what stops
+  // `core/tests/test_frontend_routes.py` from being able to check it.
   const act = async (path: string, body?: unknown) => {
     setBusy(true);
     setError(null);
     try {
-      const next = await api(`/manage/${token}/${path}`, {
+      const next = await api(path, {
         method: "POST",
         body: JSON.stringify(body ?? {}),
       });
@@ -143,7 +160,7 @@ export default function ManagePage({ params }: { params: Promise<{ token: string
           booking={booking}
           busy={busy}
           onBack={() => setView("booking")}
-          onConfirm={() => void act("cancel/")}
+          onConfirm={() => void act(`/manage/${token}/cancel/`)}
         />
       )}
       {view === "pickSlot" && (
@@ -151,7 +168,12 @@ export default function ManagePage({ params }: { params: Promise<{ token: string
           booking={booking}
           busy={busy}
           onBack={() => setView("booking")}
-          onPick={(slot) => void act("reschedule/", { starts_at: slot.starts_at, staff: slot.staff_id })}
+          onPick={(slot) =>
+            void act(`/manage/${token}/reschedule/`, {
+              starts_at: slot.starts_at,
+              staff: slot.staff_id,
+            })
+          }
         />
       )}
       {view === "done" && <Done booking={booking} />}
@@ -277,7 +299,7 @@ function PickSlot({
   useEffect(() => {
     setSlots(null);
     void fetch(
-      `${API_BASE}/shops/${booking.shop_slug}/services/${booking.service_id}/availability/?date=${date}&staff=${booking.staff_id}`,
+      `${PUBLIC_ROOT}/shops/${booking.shop_slug}/services/${booking.service_id}/availability/?date=${date}&staff=${booking.staff_id}`,
     )
       .then((r) => r.json())
       .then((body) => setSlots(body.by_staff?.[0]?.slots ?? body.any_staff ?? []))
