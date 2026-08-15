@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 CREDIT_TEMPLATES = frozenset({Template.CANCELLED_CREDIT})
 
 
-def variables_for(appointment, template, *, payment=None, credit=None):
+def variables_for(appointment, template, *, payment=None, credit=None, restored=()):
     """The dict the provider renders from. EAT, because the client reads it."""
     local = appointment.starts_at.astimezone(LOCAL_TZ)
     shop = appointment.shop
@@ -49,8 +49,21 @@ def variables_for(appointment, template, *, payment=None, credit=None):
         variables["receipt"] = payment.mpesa_receipt
         variables["support_code"] = payment.support_code
     if template == Template.BOOKING_CONFIRMED:
-        balance = max(appointment.price_snapshot - appointment.deposit_snapshot, 0)
+        # Both figures from `lifecycle`, which counts spent shop credit as well
+        # as M-Pesa. This line used to be `price_snapshot - deposit_snapshot`,
+        # and `deposit_snapshot` after `holds.apply_credit` is only what is
+        # still owed to M-Pesa — zero when credit covered the deposit outright.
+        # A client who had just spent KES 300 of their own credit was sent
+        # "Paid KES 0 deposit. Balance KES 1,200 at the shop." and would be
+        # charged the full price at the chair. In the one message they keep.
+        from scheduling.lifecycle import balance_due_for, paid_deposit_for
+
+        balance = balance_due_for(appointment)
         variables["balance"] = f"{balance:,}" if balance else ""
+        # Set here rather than left to the `payment is not None` branch above:
+        # a credit-covered booking confirms with no payment at all, so that
+        # branch never runs and the `setdefault` below reported a zero.
+        variables["paid"] = f"{paid_deposit_for(appointment):,}"
     if template in CREDIT_TEMPLATES:
         # Always present for these templates, even with no credit in hand, so a
         # renderer cannot `KeyError` on a live message path. The values are the
@@ -61,12 +74,47 @@ def variables_for(appointment, template, *, payment=None, credit=None):
         # as a message that never sends.
         variables["credit_expires"] = ""
         variables["credit_reference"] = ""
-    if credit is not None:
+    # A late cancellation can produce more than one credit: the cash half of a
+    # deposit becomes credit on a fresh window while the half that *was* credit
+    # comes back on its original expiry (`payments.credit.restore`). Both are
+    # "your money is still at this shop", so they are summarised together
+    # rather than the message growing a clause per row.
+    #
+    # Scoped to the credit templates: a refundable cancellation also carries
+    # `restored`, and there these keys mean nothing and `paid` must stay the
+    # whole deposit rather than the credit portion of it.
+    held = (
+        ([credit] if credit is not None else []) + list(restored)
+        if template in CREDIT_TEMPLATES
+        else []
+    )
+    if held:
         # EAT and a date only. A client reading "valid until 13 Oct" acts on it;
-        # one reading a timestamp with an offset does not.
-        variables["credit_expires"] = credit.expires_at.astimezone(LOCAL_TZ).strftime("%-d %b %Y")
-        variables["credit_reference"] = credit.reference
-        variables["paid"] = f"{credit.amount_kes:,}"
+        # one reading a timestamp with an offset does not. The soonest date when
+        # there are two, because it is the first one that stops being spendable
+        # and the only one it is safe to act on.
+        soonest = min(row.expires_at for row in held)
+        variables["credit_expires"] = soonest.astimezone(LOCAL_TZ).strftime("%-d %b %Y")
+        # Only when there is exactly one to quote. Two references in an SMS is a
+        # second segment (§6) to say what the manage link already shows in full.
+        variables["credit_reference"] = held[0].reference if len(held) == 1 else ""
+        variables["paid"] = f"{sum(row.amount_kes for row in held):,}"
+    if restored:
+        # A refund that came back as credit, because the deposit was paid with
+        # credit — `payments.credit.restore`. The refund message has to say so:
+        # "the shop will refund you" would leave the client waiting for a
+        # transfer that is not coming, which is the support call §12 exists to
+        # prevent, arriving by a new route.
+        #
+        # The soonest expiry when a deposit drew on more than one credit, since
+        # that is the first date any of it stops being spendable, and the
+        # reference only when there is exactly one to quote — two references in
+        # an SMS is a second segment (§6) to say something the manage link
+        # already shows in full.
+        soonest = min(row.expires_at for row in restored)
+        variables["restored"] = f"{sum(row.amount_kes for row in restored):,}"
+        variables["restored_expires"] = soonest.astimezone(LOCAL_TZ).strftime("%-d %b %Y")
+        variables["restored_reference"] = restored[0].reference if len(restored) == 1 else ""
     variables.setdefault("paid", "0")
     return variables
 
@@ -98,7 +146,14 @@ def booking_link(appointment):
 
 
 def queue_message(
-    appointment, template, *, payment=None, credit=None, to=None, variables_extra=None
+    appointment,
+    template,
+    *,
+    payment=None,
+    credit=None,
+    restored=(),
+    to=None,
+    variables_extra=None,
 ):
     """Write the row and arrange for it to be sent after this commits.
 
@@ -116,7 +171,9 @@ def queue_message(
         template=template,
         to=normalize_phone(number),
         variables={
-            **variables_for(appointment, template, payment=payment, credit=credit),
+            **variables_for(
+                appointment, template, payment=payment, credit=credit, restored=restored
+            ),
             # Whatever the caller knows that this module does not. Slice 8's
             # no-show and refund messages both name a figure that comes from
             # `lifecycle.paid_deposit_for`, which reads payments *and* redeemed

@@ -807,8 +807,16 @@ export function Paid({ state }: { state: BookingState }) {
         >
           {payment?.mpesa_receipt || payment?.support_code}
         </p>
+        {/*
+          `paid_kes` counts M-Pesa and spent shop credit together. The old
+          fallback was `hold.deposit_kes`, which after the server applies credit
+          is what is still owed to M-Pesa — zero when credit covered the deposit
+          outright — so a booking paid entirely from credit led with "KES 0
+          received". `payment` is null on exactly that path, which is why the
+          fallback was the branch that ran.
+        */}
         <p style={{ margin: "var(--bn-space-5) 0 0", fontSize: "var(--bn-text-body-size)" }}>
-          {money(payment?.amount_kes ?? hold.deposit_kes)} received.
+          {money(hold.paid_kes ?? payment?.amount_kes ?? hold.deposit_kes)} received.
         </p>
       </div>
 

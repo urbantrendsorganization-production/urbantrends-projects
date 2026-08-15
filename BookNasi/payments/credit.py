@@ -82,6 +82,10 @@ class CreditState(models.TextChoices):
 class CreditSource(models.TextChoices):
     LATE_CANCELLATION = "late_cancellation", "Cancelled inside the refund window"
     SHOP_GOODWILL = "shop_goodwill", "Issued by the shop"
+    #: Slice 11. A booking whose deposit was paid *with* credit, cancelled early
+    #: enough that §12 says the deposit comes back. Money returns in the form it
+    #: arrived, so this returns as credit rather than as cash — see `restore`.
+    BOOKING_REFUNDED = "booking_refunded", "Returned when a credit-paid booking was cancelled"
 
 
 class Credit(OrgDerivedModel):
@@ -229,6 +233,14 @@ def mint_reference():
     return "CR-" + "".join(secrets.choice(ALPHABET) for _ in range(6))
 
 
+def _unique_reference():
+    for _ in range(5):  # reference collisions are vanishingly rare; retry anyway
+        reference = mint_reference()
+        if not Credit.objects.unscoped().filter(reference=reference).exists():
+            return reference
+    raise RuntimeError("could not mint a unique credit reference")  # pragma: no cover
+
+
 def issue(*, appointment, payment, amount_kes, now=None, source=CreditSource.LATE_CANCELLATION):
     """Create a credit for a late cancellation. Returns the `Credit`.
 
@@ -239,12 +251,7 @@ def issue(*, appointment, payment, amount_kes, now=None, source=CreditSource.LAT
     """
     now = now or timezone.now()
     shop = appointment.shop
-    for _ in range(5):  # reference collisions are vanishingly rare; retry anyway
-        reference = mint_reference()
-        if not Credit.objects.unscoped().filter(reference=reference).exists():
-            break
-    else:  # pragma: no cover — five collisions in a 32^6 space
-        raise RuntimeError("could not mint a unique credit reference")
+    reference = _unique_reference()
 
     return Credit.objects.create(
         shop=shop,
@@ -327,6 +334,78 @@ def redeem(*, client, shop, appointment, amount_kes, now=None):
         outstanding -= take
 
     return applied
+
+
+def restore(*, appointment, now=None):
+    """Give back credit spent on a booking §12 says is refundable. Returns the
+    new `Credit` rows, newest issuance per source credit, usually one.
+
+    Slice 11 found the gap: `lifecycle.cancel` recorded a refund by stamping
+    `Payment.refund_due_at`, and a booking whose deposit came from credit has no
+    `Payment` row of its own, so the `.update()` matched nothing. The client was
+    told on screen and by SMS that the shop would refund them, the shop's
+    "Refund owed to the client" queue stayed empty, and the credit stayed spent.
+    The money simply left.
+
+    ## Why credit and not cash
+
+    §12's table says "refunded", and the honest reading of that for money that
+    arrived as credit is that it goes back as credit — **money returns in the
+    form it arrived**. Paying it out as cash would turn credit into a cash
+    withdrawal: a credit exists because a *late* cancellation forfeits nothing
+    but keeps the money at the shop, and a client who could book and cancel
+    early would convert it to cash at will. A mixed deposit splits the same way,
+    each half returning whence it came, and the cash half is still stamped for
+    the exception queue by the caller.
+
+    ## Why a new row rather than putting the number back
+
+    `CreditRedemption` is append-only on purpose — it is the story of which
+    booking spent what. Incrementing the source credit's `remaining_kes` would
+    leave the spend recorded and the return not, so the row would disagree with
+    the sum of its own redemptions. A fresh issuance keeps both halves visible
+    and gives the client a reference to quote.
+
+    ## The expiry is the source credit's, not a new window
+
+    Decided with the policy: a restored credit keeps the expiry of the credit it
+    came from. Minting a fresh `deposit_credit_days` here would make booking and
+    cancelling an unbounded extension — spend it, cancel, get it back for
+    another sixty days, forever. One credit per source redemption rather than
+    one lump, so a deposit drawn from two credits with different expiries gives
+    each portion its own date back instead of levelling both to the sooner one.
+
+    A consequence worth naming: if the source credit has already lapsed by the
+    time the booking is cancelled, the restored row is born expired and
+    `is_spendable` refuses it. That is what keeping the original expiry means,
+    and the alternative is the extension loophole above.
+    """
+    now = now or timezone.now()
+    restored = []
+    for redemption in appointment.credit_redemptions.select_related("credit").all():
+        source = redemption.credit
+        restored.append(
+            Credit.objects.create(
+                shop=source.shop,
+                client=source.client,
+                amount_kes=redemption.amount_kes,
+                remaining_kes=redemption.amount_kes,
+                source=CreditSource.BOOKING_REFUNDED,
+                # The same payment the original descends from. §5's carve-out
+                # treats a credit-covered booking as verified *because* this
+                # chain reaches a real M-Pesa success; breaking it here would
+                # quietly make the restored credit unusable for that.
+                source_payment=source.source_payment,
+                source_appointment=appointment,
+                expires_at=source.expires_at,
+                reference=_unique_reference(),
+                # Left OPEN even when `expires_at` is already past: `is_spendable`
+                # reads the timestamp rather than the column for exactly this
+                # window, and `expire_lapsed` tidies the column on its own sweep.
+                state=CreditState.OPEN,
+            )
+        )
+    return restored
 
 
 def expire_lapsed(*, now=None, limit=500):

@@ -110,8 +110,19 @@ export interface Hold extends RefundTerms {
   staff_name: string;
   service_name: string;
   price_kes: number;
+  /**
+   * What is still owed to M-Pesa, not what the booking's deposit is. The server
+   * subtracts any shop credit it applied, so this is zero when credit covered
+   * the deposit outright. Use `paid_kes` to say what was paid.
+   */
   deposit_kes: number;
   balance_kes: number;
+  /**
+   * M-Pesa and spent shop credit together — what the booking has actually been
+   * credited. Optional because a host may be running an older API; the paid
+   * screen falls back through `payment.amount_kes` when it is absent.
+   */
+  paid_kes?: number;
   /** Null until a push has been attempted. */
   payment: PaymentView | null;
   /** The number on screen 5's fallback line and screen 8's footer. */

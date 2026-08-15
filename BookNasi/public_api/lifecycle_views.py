@@ -37,6 +37,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from payments.credit import Credit, CreditSource
 from public_api.serializers import ManageViewSerializer
 from scheduling import lifecycle, manage_tokens
 
@@ -105,12 +106,28 @@ class ManageCancelView(ManageBaseView):
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
         appointment.refresh_from_db()
+        # A refundable cancellation of a deposit paid with shop credit returns
+        # that part as credit, not as cash — `payments.credit.restore`. The
+        # screen has to say so for the same reason the SMS does: "the shop will
+        # refund you" would leave the client waiting for a transfer nobody is
+        # sending. Read back rather than threaded through `lifecycle.cancel`'s
+        # return, which is a tuple three callers already unpack.
+        restored = list(
+            Credit.objects.unscoped().filter(
+                source_appointment=appointment, source=CreditSource.BOOKING_REFUNDED
+            )
+        )
         body = ManageViewSerializer(appointment).data
         body["result"] = {
             "outcome": outcome,
             "amount_kes": amount,
             "credit_reference": credit.reference if credit else "",
             "credit_expires_at": credit.expires_at if credit else None,
+            #: How much of `amount_kes` went back as credit. Zero for an
+            #: ordinary M-Pesa deposit, which is the common case and reads
+            #: exactly as it always did.
+            "restored_kes": sum(row.amount_kes for row in restored),
+            "restored_reference": restored[0].reference if len(restored) == 1 else "",
         }
         return Response(body)
 
