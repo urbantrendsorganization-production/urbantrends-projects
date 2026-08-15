@@ -23,6 +23,11 @@
     "incremental": false,
     "paths": {}
   },
-  "include": ["packages/booking-core/src/**/*.ts", "tests/**/*.tsx", "components/**/*.tsx"],
+  "include": [
+    "packages/booking-core/src/**/*.ts",
+    "packages/widget/src/**/*.ts",
+    "tests/**/*.tsx",
+    "components/**/*.tsx"
+  ],
   "exclude": ["node_modules", ".next", ".testbuild"]
 }

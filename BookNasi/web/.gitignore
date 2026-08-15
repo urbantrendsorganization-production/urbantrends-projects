@@ -1,2 +1,7 @@
 .testbuild/
 tsconfig.tsbuildinfo
+
+# Built by `npm run widget` from packages/widget. A minified bundle is not a
+# reviewable artefact, unlike packages/tokens/dist — CI builds it before it
+# checks it, and the deploy builds it before it serves it.
+public/widget/

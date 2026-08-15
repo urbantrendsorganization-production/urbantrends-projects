@@ -91,6 +91,7 @@ jobs:
           uv run pytest \
             core/tests/test_tenant_isolation.py \
             core/tests/test_org_scoped_manager_guard.py \
+            core/tests/test_cors.py \
             shops/tests/test_tenant_isolation.py \
             public_api/tests/test_serializer_split.py \
             scheduling/tests/test_tenant_isolation.py \
@@ -158,6 +159,18 @@ jobs:
       # The state machine and the two rendering assertions a token file cannot
       # make: a 300-character service name that does not collapse a row, and a
       # slot grid that is three per row because the invariant says so.
+      # LOAD-BEARING, and the other half of the same decision. The widget runs
+      # inside an arbitrary host page, which is the situation CLAUDE.md §10's
+      # four invariants were written for — a host stylesheet flattening the slot
+      # grid, a host root font-size shrinking every target. Neither the tokens
+      # job nor the invariants step above can see this package.
+      #
+      # It builds first, because two of the checks read the *resolved*
+      # stylesheet and the shipped bundle rather than the TypeScript: a template
+      # literal referencing INVARIANTS proves only that the constant is
+      # mentioned.
+      - name: Widget (boundary · §10 invariants · size budget)
+        run: npm run widget:check
       - name: Test
         run: npm test
       - name: Build

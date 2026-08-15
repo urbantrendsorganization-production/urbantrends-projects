@@ -34,6 +34,14 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # Slice 10. `/api/public/` only, never credentialed, never reflecting the
+    # caller's origin — the whole policy is in `core/cors.py` and it has no
+    # settings. High in the list so a preflight is answered before session,
+    # CSRF and auth work that a preflight carries nothing for, and so the
+    # response phase runs late enough to put the header on error responses that
+    # never reached a view. A 429 the browser discards is a 429 the widget
+    # reports as "no connection".
+    "core.cors.PublicApiCorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",

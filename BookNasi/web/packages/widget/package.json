@@ -1,0 +1,18 @@
+{
+  "name": "@booknasi/widget",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The embeddable booking widget. A second renderer over @booknasi/booking-core, never a second implementation.",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/build.mjs && node scripts/check-widget.mjs"
+  },
+  "dependencies": {
+    "@booknasi/booking-core": "*",
+    "@booknasi/tokens": "*"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

@@ -10,6 +10,14 @@
  * custom properties. This proves the staff screens actually use them, which is
  * the half a token file cannot check.
  *
+ * Slice 10 adds a third: `packages/widget/scripts/check-widget.mjs`. This file
+ * walks `.tsx` under `components/` and `app/`, so it cannot see the widget at
+ * all — and the widget is the build that runs inside a host page, which is the
+ * situation the four invariants were written for. The two are deliberately
+ * separate rather than merged: they check different artefacts (React source
+ * here, a resolved stylesheet and a shipped bundle there) and a single script
+ * doing both would be a script that half-checks each.
+ *
  * Run by the frontend CI job. Failing is the point.
  */
 

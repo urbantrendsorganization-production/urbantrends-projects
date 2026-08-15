@@ -50,12 +50,27 @@ export interface HttpTransportOptions {
   fetchImpl: FetchLike;
   /** Sent on unsafe requests. Absent inside a widget on another origin. */
   csrfToken?: () => string;
+  /**
+   * Slice 10. `"omit"` inside the widget, and the default stays `"include"` so
+   * the standalone app is unchanged.
+   *
+   * The widget runs on a host's origin, and `core/cors.py` answers
+   * `Access-Control-Allow-Origin: *` with credentials never allowed — a
+   * combination the browser refuses outright if the request carries them. That
+   * refusal is the point rather than an obstacle: this surface is
+   * unauthenticated and shop-scoped by slug, it has no use for a cookie, and a
+   * widget that sent one anyway would be opening a credentialed cross-origin
+   * channel to an API that has no idea what to do with it. Failing at the
+   * browser is the cheapest place for that to be noticed.
+   */
+  credentials?: "include" | "omit" | "same-origin";
 }
 
 export function httpTransport({
   baseUrl,
   fetchImpl,
   csrfToken,
+  credentials = "include",
 }: HttpTransportOptions): Transport {
   const root = `${baseUrl.replace(/\/$/, "")}/api/public/v1`;
 
@@ -69,7 +84,7 @@ export function httpTransport({
       method,
       headers,
       body: init?.body === undefined ? undefined : JSON.stringify(init.body),
-      credentials: "include",
+      credentials,
     });
     const text = await response.text();
     const body = text ? JSON.parse(text) : null;

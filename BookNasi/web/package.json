@@ -7,7 +7,7 @@
   ],
   "scripts": {
     "dev": "npm run tokens && npm run core && next dev",
-    "build": "npm run tokens && npm run core && next build",
+    "build": "npm run tokens && npm run core && npm run widget && next build",
     "start": "next start",
     "tokens": "npm --workspace @booknasi/tokens run build",
     "tokens:check": "npm --workspace @booknasi/tokens run check",
@@ -15,7 +15,9 @@
     "invariants": "node scripts/check-invariants.mjs",
     "core": "npm --workspace @booknasi/booking-core run build",
     "core:check": "npm --workspace @booknasi/booking-core run check",
-    "test": "npm run tokens && npm run core && tsc -p tsconfig.test.json && node --test \".testbuild/**/*.test.js\""
+    "test": "npm run tokens && npm run core && tsc -p tsconfig.test.json && node --test \".testbuild/**/*.test.js\"",
+    "widget": "npm --workspace @booknasi/widget run build",
+    "widget:check": "npm --workspace @booknasi/widget run check"
   },
   "dependencies": {
     "next": "^15.0.0",
