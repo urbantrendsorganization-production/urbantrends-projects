@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     "scheduling",
     "payments",
     "notifications",
+    "reporting",
     "public_api",
 ]
 

@@ -11,6 +11,8 @@ urlpatterns = [
     path("api/v1/", include("orgs.urls")),
     path("api/v1/", include("shops.urls")),
     path("api/v1/", include("scheduling.urls")),
+    # The owner dashboard. Owner/manager only — see reporting/views.py.
+    path("api/v1/", include("reporting.urls")),
     # Unauthenticated, shop-scoped by slug, consumed by the widget and by any
     # third-party integrator. Its serializers live in a separate module and
     # share no code with the org-scoped ones above — CLAUDE.md §1. A shared

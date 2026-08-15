@@ -241,6 +241,20 @@ Settled 1 August 2026 at the close of design scoping. Implement these; don't re-
 - **Subscription state is a plain enum.** No fair-use ceiling modelled, no limit enforcement, until there is a billing slice that needs it.
 - **Standalone-first.** The design's client flow assumes a shop-branded page; the widget is a second build target over the same `booking-core`, so shipping standalone first costs the `/site` path nothing.
 
+**Reporting** — settled at slice 9, when the dashboard was built and the design's Overview turned out to ask for one number nobody can produce.
+
+- **There is no "before deposits" baseline, and the dashboard never invents one.** The design draws no-shows before vs after deposits as two bars, 18.4 % grey against 7.1 % green. The "before" is the shop's notebook and we were not there; the first row we can measure was written on the day they signed up. Three ways to fake it were considered and each is worse than not drawing the card: asking the owner for their old rate puts a remembered number on screen indistinguishable from a measured one, for the life of the account; comparing deposit-backed against deposit-free bookings is structurally rigged, because a walk-in is recorded with the client already in the chair and can essentially never be a no-show; shipping the design's numbers as placeholders is not an option. What ships is **the shop against its own preceding period of equal length**, with both date ranges printed so it cannot be read as anything else — plus the forfeited total, which is §1's argument in one number and needs no baseline at all.
+
+- **Revenue is billed, not banked.** `revenue_kes` is `price_snapshot` on completed work — what the shop charged. `money.collected_kes` beside it is the deposit that actually arrived by M-Pesa. Two columns, never summed: balance collection at the chair is out of v1, so the product cannot know the rest was paid and must not imply it. Deposit money is attributed to the **booking**, not to the day it arrived, so every figure on the screen describes the same set of appointments.
+
+- **Unfinished bookings are published, not absorbed.** An appointment whose time has passed while still `confirmed` is one nobody pressed Finish on, and it is missing from revenue, utilisation and the no-show rate alike. A shop where a third of the period is unresolved is being shown numbers that are wrong by a third, so the count appears on the screen next to them. This is a completeness caveat on figures being displayed, and deliberately not the adoption warning ruled out below.
+
+- **The repeat-client rate travels with its coverage.** Walk-ins carry no client record — asking for a name at the chair is friction §4 forbids — so the rate is computed over identified clients and the screen prints what share of the period that was. Without it, a number about a minority of a shop's trade reads as a number about the shop.
+
+- **Owner and manager only.** §12's per-person logins exist so revenue can be attributed per stylist; a stylist who can read the attribution can read everybody's pay. The staff day view is unchanged and there is no query parameter that widens it.
+
+- **The headline states a conclusion, and the conclusion is chosen server-side.** The design is right that an owner should not have to do arithmetic to know whether to renew, and "Deposits are working" is also the most dangerous string in the product — it is software making a claim about somebody's business. So `reporting/metrics.verdict_for` picks it where it can be tested against numbers and the client only words it. One ordering rule is load-bearing: **"you are not taking deposits" is reached before anything encouraging**, because a shop with every service set to no-deposit is the shop that churns and is the one that most easily looks fine on a quiet fortnight.
+
 **Scope corrections made at the same time**
 
 - Reschedule is **in**, as a single move on a single booking — see §8.
