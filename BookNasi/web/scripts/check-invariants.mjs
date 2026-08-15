@@ -10,6 +10,14 @@
  * custom properties. This proves the staff screens actually use them, which is
  * the half a token file cannot check.
  *
+ * Slice 10 adds a third: `packages/widget/scripts/check-widget.mjs`. This file
+ * walks `.tsx` under `components/` and `app/`, so it cannot see the widget at
+ * all — and the widget is the build that runs inside a host page, which is the
+ * situation the four invariants were written for. The two are deliberately
+ * separate rather than merged: they check different artefacts (React source
+ * here, a resolved stylesheet and a shipped bundle there) and a single script
+ * doing both would be a script that half-checks each.
+ *
  * Run by the frontend CI job. Failing is the point.
  */
 
@@ -85,8 +93,59 @@ if (!/minHeight:\s*64/.test(walkIn) && !walkIn.includes("walkIn")) {
   failures.push(`the "Something else" row must be at least ${WALK_IN_ROW}px`);
 }
 
+// -------------------------------------------------- invariants 3 and 4
+//
+// Nothing checked these until slice 6, because until slice 6 there was no STK
+// waiting screen for them to be on. They are the two that decide whether a
+// deposit completes, so they are checked the same way as the heights: against
+// the constants, in CI.
+
+const booking = readFileSync(join(ROOT, "components/booking/BookingFlow.tsx"), "utf8");
+
+/**
+ * Comments stripped before anything is matched.
+ *
+ * Same reason `test_org_scoped_manager_guard.py` parses instead of grepping:
+ * this file's own explanation of *why* `*334#` must come from the token
+ * contains the string `*334#`, and a check that cannot tell code from a comment
+ * about code gets weakened until it means nothing.
+ */
+const bookingCode = booking.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+// **Invariant 3 — the hold countdown stays visible.** Checked as "the countdown
+// is rendered from `countdownLabel`" rather than "a countdown exists", because
+// the failure this guards against is not deletion. It is a well-meaning tidy-up
+// that renders the raw seconds and shows "0:00 — expired" while the server is
+// still holding the slot through its grace window, which is the unexplained
+// failure the invariant is about.
+if (!bookingCode.includes("countdownLabel")) {
+  failures.push(
+    "BookingFlow.tsx must render the hold countdown through countdownLabel, so a " +
+      "timer at zero with a push still outstanding says so instead of claiming to have expired"
+  );
+}
+if (/countdown\s*&&|hideCountdown|showCountdown/.test(bookingCode)) {
+  failures.push("the hold countdown must not be behind a condition — CLAUDE.md §10, invariant 3");
+}
+
+// **Invariant 4 — the `*334#` USSD fallback.** From the token, never typed, so
+// a re-skin cannot edit it away and a translation cannot drop it. When the push
+// does not arrive — and it often does not — this line is the difference between
+// a completed deposit and an abandoned booking.
+if (!bookingCode.includes("INVARIANTS.ussdFallback")) {
+  failures.push(
+    "the STK waiting screen must show INVARIANTS.ussdFallback, from the token and not as a literal"
+  );
+}
+if (/["'`]\*334#["'`]/.test(bookingCode)) {
+  failures.push("the USSD fallback must come from INVARIANTS.ussdFallback, not a hardcoded string");
+}
+
 if (failures.length) {
   console.error("CLAUDE.md §10 invariants violated:\n" + failures.map((f) => `  - ${f}`).join("\n"));
   process.exit(1);
 }
-console.log(`invariants ok — ${MIN_TARGET}px floor, ${WALK_IN_ROW}px walk-in rows`);
+console.log(
+  `invariants ok — ${MIN_TARGET}px floor, ${WALK_IN_ROW}px walk-in rows, ` +
+    "3-per-row grid, visible countdown, USSD fallback"
+);

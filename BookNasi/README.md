@@ -83,6 +83,26 @@ npm run dev
 
 API on `http://localhost:8000`, web on `http://localhost:3000`.
 
+### The embeddable widget
+
+```bash
+cd web
+npm run widget          # builds public/widget/booknasi.js
+npm run widget:check    # the structural checks CI runs
+```
+
+A host site needs one tag:
+
+```html
+<script src="https://booknasi.co.ke/widget/booknasi.js"
+        data-shop="mint-braids-kilimani"
+        data-api="https://api.booknasi.co.ke"></script>
+```
+
+`web/public/widget/demo.html` is a deliberately hostile fake host page that
+mounts it twice, once as BookNasi ships it and once re-skinned, to prove the
+theming and the isolation. See [`web/packages/widget/README.md`](./web/packages/widget/README.md).
+
 ### Tests
 
 ```bash
@@ -121,6 +141,10 @@ Never commit a filled `.env`. Sandbox credentials are still credentials.
 **M-Pesa callbacks are idempotent.** Safaricom retries; a unique constraint on the checkout request ID means a retry can't double-charge or double-book.
 
 **Times** are stored in UTC and rendered in EAT. Single zone, no DST.
+
+**The widget is a renderer, not a second app.** The booking flow's state machine lives in `web/packages/booking-core`, framework-free and enforced as such, so the embedded widget and the hosted page make the same decisions from the same code. The widget renders it in ~12 kB with no framework, inside a shadow root — which is what lets a host restyle it by named token while its stylesheet cannot reach the 52 px targets, the three-per-row slot grid, the hold countdown or the `*334#` line.
+
+**Cross-origin access is `/api/public/` only**, with credentials never allowed and the caller's origin never reflected. The org-scoped `/api/v1/` gets no CORS header at all; the same-origin policy is a control there.
 
 See [`CLAUDE.md`](./CLAUDE.md) for the full engineering contract.
 

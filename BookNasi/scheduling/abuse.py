@@ -96,6 +96,34 @@ neighbourhood on a Saturday morning. So the IP throttle in settings is set as a
 crude ceiling against a single unsophisticated script, and the per-phone limits
 above are the real control. Anyone claiming per-IP protects this surface has
 not looked at where the traffic comes from.
+
+## The rule that follows from it: one scope per public endpoint
+
+**Every new public endpoint gets its own throttle scope. No exceptions, no
+sharing, decided when the endpoint is written and not when it breaks.**
+
+CGNAT makes a shared scope worse than it looks. A shared budget is not "these
+endpoints together get 240/hour" — it is "one client's traffic can exhaust the
+allowance of every stranger who happens to share their operator's NAT pool",
+and the endpoint that gets the 429 is whichever one they touch next, not the
+noisy one. The failure surfaces as an unrelated screen freezing for somebody
+who did nothing.
+
+This has now cost us twice. Slice 5 set the per-IP hold limit tight enough to
+refuse honest clients, which is what the per-phone controls above exist to fix.
+Slice 6 put a 3-second poll on `hold-detail` inside `public-read`: ~180 requests
+for one booking against a ceiling shared with the shop, service, staff and
+availability reads, so two clients behind one NAT address 429'd each other in
+the middle of paying — and a 429 there freezes the STK screen on "check your
+phone" with money already gone.
+
+Both were the same mistake in a new place. A per-endpoint scope makes the
+budget a property of the endpoint's own traffic shape, so a polled endpoint
+being polled cannot starve a page nobody is looking at. Scopes are cheap; a
+client stuck mid-payment is not.
+
+`core/tests/test_throttle_scopes.py` enforces this — a public view added
+without its own scope fails there rather than in production.
 """
 
 from datetime import timedelta

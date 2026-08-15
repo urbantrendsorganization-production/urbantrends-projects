@@ -650,6 +650,41 @@ class TestTheHoldEndpoints:
             "price_kes",
             "deposit_kes",
             "balance_kes",
+            # slice 6. `payment` is the payment's own state plus the support
+            # code — nothing about the client that the caller did not send.
+            # `shop_phone` is already on the shop's public page header.
+            "payment",
+            "shop_phone",
+            # The refund terms and the shop's name, for the booking page the
+            # confirmation SMS links to. That page is reached by appointment id
+            # from an SMS and has no shop object to read them from. All three
+            # are already public on the shop's own page — CLAUDE.md §12.
+            "shop_name",
+            "refund_window_hours",
+            "deposit_credit_days",
+        }
+
+    def test_the_payment_block_names_no_person(self, api_client, shop_setup, wednesday):
+        """The STK screens read themselves out of `payment`, so its field set is
+        as load-bearing as the outer one. In particular: no payer phone number.
+        The client typed it, but this endpoint is unauthenticated and the id is
+        the only thing standing between a guess and someone else's number."""
+        from payments.stk import initiate_push
+
+        appointment = hold(shop_setup, eat(wednesday, 10))
+        initiate_push(appointment)
+        url = reverse("public_api:hold-detail", kwargs={"hold_id": appointment.pk})
+
+        payment = api_client.get(url).data["payment"]
+
+        assert set(payment) == {
+            "state",
+            "amount_kes",
+            "support_code",
+            "mpesa_receipt",
+            "push_outstanding",
+            "message",
+            "slot_lost",
         }
 
     def test_a_client_can_give_the_slot_back(self, api_client, shop_setup, wednesday):

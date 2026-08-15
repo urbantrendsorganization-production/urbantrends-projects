@@ -33,6 +33,25 @@ from rest_framework import serializers
 from shops.models import OpeningHours, Service, Shop, Staff
 
 
+def _client_message_for(payment):
+    """The safe sentence screen 7 shows. Never Safaricom's raw `ResultDesc`.
+
+    Two sources, because a payment can fail in two places. A callback brings a
+    `ResultCode` and `RESULT_MESSAGES` maps it. A push Safaricom refused
+    outright never gets that far — it carries only a `result_desc` from the push
+    call — and left unhandled it produced an empty string, so screen 7 named a
+    failure and then gave no reason for it.
+    """
+    from payments.messages import client_message, push_not_sent_message
+    from payments.states import PaymentState
+
+    if payment.result_code not in (None, 0):
+        return client_message(payment.result_code)
+    if payment.state == PaymentState.PUSH_FAILED:
+        return push_not_sent_message()
+    return ""
+
+
 class PublicOpeningHoursSerializer(serializers.Serializer):
     weekday = serializers.IntegerField(read_only=True)
     opens_at = serializers.TimeField(read_only=True)
@@ -62,8 +81,12 @@ class PublicShopSerializer(serializers.Serializer):
     # Drives the hold countdown. The countdown is not themeable and not
     # hideable — CLAUDE.md §10 — so the client has to be told its length.
     hold_ttl_minutes = serializers.IntegerField(read_only=True)
-    # The refund rule is shown before payment, never after.
+    # The refund rule is shown before payment, never after. Both halves of it:
+    # the window, and how long a late cancellation's credit lasts. CLAUDE.md §12
+    # settled the terms on 14 August 2026 and §5 requires the client to read
+    # them before they pay, which means the public API has to carry them.
     refund_window_hours = serializers.IntegerField(read_only=True)
+    deposit_credit_days = serializers.IntegerField(read_only=True)
     opening_hours = serializers.SerializerMethodField()
 
     class Meta:
@@ -153,6 +176,83 @@ class PublicHoldSerializer(serializers.Serializer):
     price_kes = serializers.IntegerField(source="price_snapshot", read_only=True)
     deposit_kes = serializers.IntegerField(source="deposit_snapshot", read_only=True)
     balance_kes = serializers.SerializerMethodField()
+    #: Slice 6. The countdown has to be able to say "still checking with M-Pesa"
+    #: rather than "expired" — see `get_payment`.
+    payment = serializers.SerializerMethodField()
+    shop_phone = serializers.SerializerMethodField()
+    shop_name = serializers.SerializerMethodField()
+    #: The refund terms, again. They are on the confirm screen before payment
+    #: (CLAUDE.md §5) and they are here because the confirmation SMS links to
+    #: the booking's own page, and a client reading the terms afterwards should
+    #: find the same sentence rather than have to remember it. Two integers, not
+    #: prose: the copy is the client's to render and relabel — §10 — and the
+    #: policy behind it is §12's.
+    refund_window_hours = serializers.SerializerMethodField()
+    deposit_credit_days = serializers.SerializerMethodField()
+
+    def get_shop_name(self, appointment):
+        return appointment.shop.name
+
+    def get_refund_window_hours(self, appointment):
+        return appointment.shop.refund_window_hours
+
+    def get_deposit_credit_days(self, appointment):
+        return appointment.shop.deposit_credit_days
+
+    def get_shop_phone(self, appointment):
+        """The number on screen 5's fallback line and screen 8's footer.
+
+        Public already: it is on the shop's own booking page header.
+        """
+        return appointment.shop.phone
+
+    def get_payment(self, appointment):
+        """What the STK waiting screen renders itself from.
+
+        Four things, and each one is on a screen:
+
+        - `state` drives screens 5 → 6 / 7 / 8. It is the *payment's* state, not
+          the appointment's, because those are two machines and the client is
+          watching the money one.
+        - `push_outstanding` is the fact the countdown needs. Without it a
+          client whose timer reaches 0:00 while Safaricom is still thinking is
+          told the slot expired, which is the unexplained failure CLAUDE.md §10
+          invariant 3 exists to prevent. With it the screen says "still checking
+          with M-Pesa" and stays honest.
+        - `message` is client-safe copy, never Safaricom's raw ResultDesc.
+          Screen 7 names the reason; `payments/messages.py` decides which
+          reasons are safe to name.
+        - `support_code` is what screen 8 shows and what the client reads down
+          the phone. Present as soon as a push exists, because the case it is
+          for is the one where nothing else worked.
+
+        The M-Pesa receipt is here too — screen 6 puts it above everything else,
+        since it is the client's proof at the door.
+        """
+        from payments.states import OrphanReason, PaymentState
+        from payments.stk import outstanding_push
+
+        payment = appointment.payments.order_by("-created_at").first()
+        if payment is None:
+            return None
+        return {
+            "state": payment.state,
+            "amount_kes": payment.amount,
+            "support_code": payment.support_code,
+            "mpesa_receipt": payment.mpesa_receipt,
+            "push_outstanding": outstanding_push(appointment),
+            "message": _client_message_for(payment),
+            # ORPHANED is not enough on its own. `settle_succeeded` orphans for
+            # four reasons and only one of them is the lost race screen 8
+            # describes; the other three leave the booking intact. Combined with
+            # this serializer always reporting the *newest* payment, a client who
+            # answered two prompts would be shown "your slot was taken, the shop
+            # will call" over a booking that is confirmed and paid for.
+            "slot_lost": (
+                payment.state == PaymentState.ORPHANED
+                and payment.orphan_reason == OrphanReason.SLOT_LOST
+            ),
+        }
 
     def get_local_time(self, appointment):
         from scheduling.availability import LOCAL_TZ
@@ -185,3 +285,114 @@ class PublicStaffSerializer(serializers.Serializer):
 
     class Meta:
         model = Staff
+
+
+class ManageViewSerializer(serializers.Serializer):
+    """What the manage page renders. Slice 7.
+
+    Wider than `PublicHoldSerializer` because this page can act, and a button
+    whose consequence is not on screen is worse than no button — CLAUDE.md §5
+    requires the terms to be readable before money moves, and on the cancel
+    screen the term that matters is the *figure*.
+
+    `actions` is computed by `scheduling/lifecycle.actions_for`, the same
+    function the cancel endpoint applies, so the screen and the write cannot
+    disagree about what a client is owed.
+
+    Still narrow on identity. This is unauthenticated, keyed by a token that
+    reached one phone: no client name, no other bookings, nothing about the
+    shop's day.
+    """
+
+    id = serializers.UUIDField(read_only=True)
+    status = serializers.CharField(read_only=True)
+    starts_at = serializers.DateTimeField(read_only=True)
+    ends_at = serializers.DateTimeField(read_only=True)
+    local_time = serializers.SerializerMethodField()
+    local_date = serializers.SerializerMethodField()
+    staff_name = serializers.SerializerMethodField()
+    staff_id = serializers.SerializerMethodField()
+    service_name = serializers.SerializerMethodField()
+    service_id = serializers.SerializerMethodField()
+    price_kes = serializers.IntegerField(source="price_snapshot", read_only=True)
+    deposit_kes = serializers.IntegerField(source="deposit_snapshot", read_only=True)
+    balance_kes = serializers.SerializerMethodField()
+    paid_kes = serializers.SerializerMethodField()
+    shop_name = serializers.SerializerMethodField()
+    shop_slug = serializers.SerializerMethodField()
+    shop_phone = serializers.SerializerMethodField()
+    refund_window_hours = serializers.SerializerMethodField()
+    deposit_credit_days = serializers.SerializerMethodField()
+    actions = serializers.SerializerMethodField()
+    credit = serializers.SerializerMethodField()
+
+    def get_local_time(self, appointment):
+        from scheduling.availability import LOCAL_TZ
+
+        return appointment.starts_at.astimezone(LOCAL_TZ).strftime("%H:%M")
+
+    def get_local_date(self, appointment):
+        from scheduling.availability import LOCAL_TZ
+
+        return appointment.starts_at.astimezone(LOCAL_TZ).strftime("%Y-%m-%d")
+
+    def get_staff_name(self, appointment):
+        return appointment.staff.display_name
+
+    def get_staff_id(self, appointment):
+        return str(appointment.staff_id)
+
+    def get_service_name(self, appointment):
+        return appointment.service.name
+
+    def get_service_id(self, appointment):
+        return str(appointment.service_id)
+
+    def get_balance_kes(self, appointment):
+        return max(appointment.price_snapshot - appointment.deposit_snapshot, 0)
+
+    def get_paid_kes(self, appointment):
+        from scheduling.lifecycle import paid_deposit_for
+
+        return paid_deposit_for(appointment)
+
+    def get_shop_name(self, appointment):
+        return appointment.shop.name
+
+    def get_shop_slug(self, appointment):
+        return appointment.shop.slug
+
+    def get_shop_phone(self, appointment):
+        return appointment.shop.phone or ""
+
+    def get_refund_window_hours(self, appointment):
+        return appointment.shop.refund_window_hours
+
+    def get_deposit_credit_days(self, appointment):
+        return appointment.shop.deposit_credit_days
+
+    def get_actions(self, appointment):
+        from scheduling.lifecycle import actions_for
+
+        return actions_for(appointment)
+
+    def get_credit(self, appointment):
+        """Spendable credit this client holds at this shop, if any.
+
+        On the manage page because it is the page a client opens after a late
+        cancellation, and "you have KES 875 until 13 October" is the whole
+        reason credit is not a forfeit.
+        """
+        from payments.credit import balance_for, spendable_for
+
+        if appointment.client_id is None:
+            return None
+        balance = balance_for(appointment.client, appointment.shop)
+        if balance < 1:
+            return None
+        soonest = spendable_for(appointment.client, appointment.shop).first()
+        return {
+            "balance_kes": balance,
+            "expires_at": soonest.expires_at if soonest else None,
+            "reference": soonest.reference if soonest else "",
+        }

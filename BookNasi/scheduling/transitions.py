@@ -44,16 +44,43 @@ collide. `finished_at` still records the truth, `duration_snapshot` still holds
 what was booked, and telling the next client is slice 8's job.
 """
 
+import logging
 from datetime import timedelta
+from enum import Enum
 
 from django.db import transaction
 from django.utils import timezone
 
 from scheduling.booking import order_bookings_for, slot_taken_on_conflict
 from scheduling.models import RANGE_BOUNDS, Appointment
-from scheduling.statuses import ACTIVE_STATUSES, AppointmentStatus
+from scheduling.statuses import ACTIVE_STATUSES, AppointmentStatus, BookingSource
 
 S = AppointmentStatus
+
+
+logger = logging.getLogger(__name__)
+
+
+class Actor(Enum):
+    """Who is asking. There are two, and they have different tables.
+
+    Added in slice 6. The payment callback needs two edges no staff member may
+    ever have — `pending_payment -> confirmed` and `cancelled -> confirmed` —
+    and the reason they are separated rather than merged into
+    `STAFF_TRANSITIONS` is CLAUDE.md §5: confirming an unpaid hold is what a
+    *paid callback* does. Granting it to a person hands out the deposit-free
+    booking the whole rule exists to prevent.
+
+    `STAFF` is the default on `apply_transition`, so every caller written
+    before this existed is unchanged and no view can reach the system table by
+    forgetting an argument. Reaching it deliberately from a view is refused by
+    `payments/tests/test_system_transition_guard.py`, which parses the source —
+    a default alone is a convention, and conventions are what this repo has
+    been replacing with tests since slice 1.
+    """
+
+    STAFF = "staff"
+    SYSTEM = "system"
 
 
 class TransitionRefused(Exception):
@@ -63,9 +90,10 @@ class TransitionRefused(Exception):
     `SlotTaken`, which means the transition was legal and the chair was gone.
     """
 
-    def __init__(self, appointment, to_status):
+    def __init__(self, appointment, to_status, actor=Actor.STAFF):
         self.appointment = appointment
         self.to_status = to_status
+        self.actor = actor
         super().__init__(
             f"An appointment that is {appointment.get_status_display().lower()} "
             f"cannot become {S(to_status).label.lower()}."
@@ -87,6 +115,32 @@ STAFF_TRANSITIONS = {
     S.COMPLETED: frozenset({S.IN_PROGRESS, S.CONFIRMED}),
     S.NO_SHOW: frozenset({S.CONFIRMED}),
     S.CANCELLED: frozenset({S.CONFIRMED}),
+}
+
+#: The other table. Two edges, and no more.
+#:
+#: `pending_payment -> confirmed` is the ordinary paid callback.
+#:
+#: `cancelled -> confirmed` is the late callback: the hold expired, the slot was
+#: released, and the money arrived afterwards. The design's handoff is explicit
+#: that this must still confirm ("a late callback after a timeout must still
+#: confirm the booking and send the SMS"), and re-entering `ACTIVE_STATUSES`
+#: puts the row back under the exclusion constraint — so if somebody took the
+#: slot in the meantime, the database refuses and that refusal *is* `slotLost`.
+#:
+#: Note this is the same edge a staff member already has for undoing a
+#: mis-tapped cancel, and that is not an accident: undo-a-cancel and
+#: honour-a-late-payment are the same operation with the same collision risk,
+#: which is why slice 6 needed no new mechanism for the hardest case in the
+#: payment machine.
+SYSTEM_TRANSITIONS = {
+    S.PENDING_PAYMENT: frozenset({S.CONFIRMED}),
+    S.CANCELLED: frozenset({S.CONFIRMED}),
+}
+
+TRANSITIONS_BY_ACTOR = {
+    Actor.STAFF: STAFF_TRANSITIONS,
+    Actor.SYSTEM: SYSTEM_TRANSITIONS,
 }
 
 
@@ -115,14 +169,14 @@ def _range(appointment, ends_at):
     return DateTimeTZRange(appointment.starts_at, ends_at, RANGE_BOUNDS)
 
 
-def apply_transition(appointment, to_status, *, now=None, expired_hold=False):
+def apply_transition(appointment, to_status, *, now=None, expired_hold=False, actor=Actor.STAFF):
     """Move one appointment to `to_status`, with its side effects. Returns it.
 
     **The only function that writes `Appointment.status`.** Slice 5's hold
     release goes through here too rather than setting the column itself —
-    `holds.release_hold` is a thin wrapper — because two places writing one
-    column is how a status ends up with the side effects of the other path
-    missing.
+    `holds.release_hold` is a thin wrapper — and so does slice 6's payment
+    settlement, because two places writing one column is how a status ends up
+    with the side effects of the other path missing.
 
     Raises `TransitionRefused` when the move is not in the table, and `SlotTaken`
     when re-entering an active status collides with something booked in the
@@ -132,6 +186,9 @@ def apply_transition(appointment, to_status, *, now=None, expired_hold=False):
     cancel. Only the former is counted by `scheduling/abuse.py`; see the note
     there about not teaching people to walk away from the page instead of using
     the button.
+
+    `actor` chooses the table. It defaults to `STAFF` so that no caller reaches
+    the system edges by omission — see `Actor`.
     """
     now = now or timezone.now()
     to_status = S(to_status)
@@ -142,8 +199,8 @@ def apply_transition(appointment, to_status, *, now=None, expired_hold=False):
         # must not re-stamp `started_at` to a later time.
         return appointment
 
-    if to_status not in STAFF_TRANSITIONS.get(appointment.status, frozenset()):
-        raise TransitionRefused(appointment, to_status)
+    if to_status not in TRANSITIONS_BY_ACTOR[actor].get(appointment.status, frozenset()):
+        raise TransitionRefused(appointment, to_status, actor)
 
     fields = ["status", "updated_at"]
     was_holding = appointment.status == S.PENDING_PAYMENT
@@ -195,6 +252,19 @@ def apply_transition(appointment, to_status, *, now=None, expired_hold=False):
         appointment.hold_release_task_id = None
         fields += ["hold_released_at", "hold_release_task_id"]
 
+    elif (
+        actor is Actor.SYSTEM
+        and to_status == S.CONFIRMED
+        and appointment.hold_released_at is not None
+    ):
+        # The late callback, case 1. This hold *did* expire, so slice 5 stamped
+        # it — but the client did not abandon it, they paid for it, and
+        # `scheduling/abuse.py` counts `hold_released_at` inside the last hour
+        # as an abandonment. Leaving the stamp would put a paying client into
+        # the cooldown that exists for people who walk away from held slots.
+        appointment.hold_released_at = None
+        fields.append("hold_released_at")
+
     with slot_taken_on_conflict(starts_at=appointment.starts_at, staff=appointment.staff):
         with transaction.atomic():
             if to_status in ACTIVE_STATUSES:
@@ -211,7 +281,64 @@ def apply_transition(appointment, to_status, *, now=None, expired_hold=False):
 
         cancel_scheduled_release(queued_release, appointment_id=appointment.pk)
 
+    # Slice 8. Reminders follow the status, and this is the only place status
+    # moves — so hooking here means a confirmation path added later cannot
+    # forget to arm them, and a cancellation path added later cannot forget to
+    # kill them. CLAUDE.md §6: a client reminded about a booking that no longer
+    # exists is a trust bug.
+    #
+    # After the commit, and never allowed to fail the transition. A messaging
+    # problem must not roll back a booking that is now confirmed — the same rule
+    # `payments/callbacks.py` applies to the confirmation SMS.
+    _after_transition(appointment, to_status, now=now)
+
     return appointment
+
+
+def _after_transition(appointment, to_status, *, now=None):
+    """Everything the messaging layer owes this status change.
+
+    One hook rather than several, because this is the only place status moves
+    and a second hook somewhere else is a second place to forget.
+    """
+    from notifications import reminders
+
+    try:
+        if to_status in ACTIVE_STATUSES:
+            reminders.ensure_scheduled(appointment, now=now)
+        else:
+            # Cancelled, completed, no-show. Nothing left to remind about.
+            reminders.cancel_for(appointment)
+
+        if to_status == S.NO_SHOW:
+            _tell_them_they_missed_it(appointment)
+    except Exception:  # noqa: BLE001 — see above
+        logger.exception("could not run post-transition messaging for %s", appointment.pk)
+
+
+def _tell_them_they_missed_it(appointment):
+    """The forfeit, said out loud. Slice 8.
+
+    §12 requires the refund terms to be readable *before* payment, and they are
+    — but a client who has just lost KES 875 to a rule they read three weeks ago
+    is owed the sentence saying so. A forfeit nobody is told about is exactly
+    the support call that policy was written to prevent.
+
+    Only when money was actually kept. A no-show on a booking that never
+    completed its push has nothing to report, and "you missed it and we kept
+    KES 0" is a worse message than none.
+    """
+    from notifications.service import queue_message
+    from notifications.templates import Template
+    from scheduling.lifecycle import is_forfeited, paid_deposit_for
+
+    if appointment.source != BookingSource.ONLINE or not is_forfeited(appointment):
+        return
+    queue_message(
+        appointment,
+        Template.NO_SHOW,
+        variables_extra={"paid": f"{paid_deposit_for(appointment):,}"},
+    )
 
 
 def blocking_appointment_for(appointment):

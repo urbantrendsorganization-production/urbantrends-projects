@@ -10,7 +10,9 @@ import pytest
 
 from clients.models import Client
 from core.managers import CrossTenantQueryError
+from notifications.models import Message, Reminder
 from orgs.models import Membership, StaffInvite
+from payments.models import Credit, CreditRedemption, Payment, PaymentMove
 from scheduling.models import Appointment
 from shops.models import (
     Leave,
@@ -45,6 +47,19 @@ ORG_SCOPED_MODELS = [
     # slice 3
     Client,
     Appointment,
+    # slice 6. `MpesaCallback` is deliberately absent: it is not org-scoped,
+    # because an unmatched callback belongs to no tenant. See its docstring.
+    Payment,
+    PaymentMove,
+    Message,
+    # slice 7. Credit is a shop's liability to one client, and a redemption is
+    # where it went — both carry money and both are org-derived, so both are
+    # exactly the kind of row a cross-tenant read must never reach.
+    Credit,
+    CreditRedemption,
+    # slice 8. A reminder names a client and a time and belongs to one shop's
+    # day; a cross-tenant read of these is a list of who is coming in and when.
+    Reminder,
 ]
 
 

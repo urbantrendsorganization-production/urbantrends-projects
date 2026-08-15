@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Widget host harness</title>
+
+    <!--
+      The design handoff's "06 Neutral widget": the same flow re-tokenised into
+      a fake host brand — near-black, off-white, square corners, uppercase
+      wide-tracked labels, and "reservation fee" instead of "deposit".
+
+      This page exists to be *hostile* in the way a real host site is hostile,
+      because none of the claims the widget makes about isolation can be
+      checked by reading it. So:
+
+        - the stylesheet below sets `html { font-size: 11px }` and a rule that
+          would flatten every button on the page to 32px. Inside the shadow
+          root neither can reach anything, and the 52px floor is in px so the
+          root font size cannot scale it down. Both are deliberate.
+        - two widgets are mounted, one BookNasi-branded and one re-skinned,
+          from the same bundle on the same page. If they can be told apart
+          only by the colours, the theming claim holds; if the second one is
+          also styled by the host's `button` rule, it does not.
+
+      Served at /widget/demo.html. `data-api` defaults to the local API — point
+      it wherever you are testing.
+    -->
+    <style>
+      /* A host page's own opinions. Every one of these is a rule a real site
+         would have for its own reasons, and every one of them would break the
+         widget if the boundary were a plain div. */
+      html {
+        font-size: 11px;
+      }
+      body {
+        margin: 0;
+        background: #0d0d0f;
+        color: #f4f2ee;
+        font-family: "Trebuchet MS", ui-sans-serif, system-ui, sans-serif;
+        font-size: 1.4rem;
+        line-height: 1.6;
+      }
+      button {
+        height: 32px !important;
+        border-radius: 0 !important;
+        font-size: 10px !important;
+      }
+      .wrap {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 48px 24px 96px;
+      }
+      h1 {
+        font-size: 2.4rem;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        font-weight: 400;
+        margin: 0 0 8px;
+      }
+      p.lede {
+        color: #9d998f;
+        margin: 0 0 40px;
+        max-width: 60ch;
+      }
+      .pair {
+        display: grid;
+        gap: 32px;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        align-items: start;
+      }
+      .frame {
+        border: 1px solid #2a2a2e;
+        padding: 16px;
+      }
+      .frame h2 {
+        font-size: 1.2rem;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: #9d998f;
+        font-weight: 400;
+        margin: 0 0 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Ateliér</h1>
+      <p class="lede">
+        A fake host brand. The booking flow below is the BookNasi widget, twice, from one
+        bundle — once as BookNasi ships it, once re-tokenised into this page's palette. The
+        page also sets an 11 px root font size and a rule that flattens every button to
+        32 px; neither reaches inside.
+      </p>
+
+      <div class="pair">
+        <div class="frame">
+          <h2>As BookNasi ships it</h2>
+          <div id="plain"></div>
+        </div>
+
+        <div class="frame">
+          <h2>Re-tokenised for this host</h2>
+          <div id="branded"></div>
+        </div>
+      </div>
+    </div>
+
+    <script src="./booknasi.js"></script>
+    <script>
+      // Both mounted by hand rather than by `data-shop` on the script tag,
+      // because this page wants two of them. The one-tag integration is the
+      // common case and is documented in packages/widget/README.md.
+      var shop = new URLSearchParams(location.search).get("shop") || "mint-braids-kilimani";
+      var api = new URLSearchParams(location.search).get("api") || "http://localhost:8000";
+
+      window.BookNasi.mount("#plain", { shop: shop, api: api });
+
+      window.BookNasi.mount("#branded", {
+        shop: shop,
+        api: api,
+        // The nine styling options, and the copy token. There is no tenth: the
+        // 52 px floor, the three-per-row grid, the visible countdown and the
+        // *334# line are constants, not custom properties — CLAUDE.md §10.
+        //
+        // Note what is *not* here: text colour. The widget's surfaces are
+        // themeable and its ink is not, which is why this re-skin is a light
+        // panel inside a near-black page rather than a dark panel — and which
+        // is also the design's own neutral-widget mock. The reason is in
+        // config.ts: a host who can set ink can set it to the surface colour,
+        // and the refund sentence that §10 says may never be removed becomes
+        // removable by making it invisible.
+        accent: "#141417",
+        "accent-pressed": "#3a3a40",
+        surface: "#ffffff",
+        canvas: "#f4f2ee",
+        border: "#d8d5cf",
+        radius: "0px",
+        "font-ui": '"Trebuchet MS", ui-sans-serif, system-ui, sans-serif',
+        "font-display": '"Trebuchet MS", ui-sans-serif, system-ui, sans-serif',
+        "label-case": "uppercase",
+        // Money words are copy tokens. "Deposit" reads wrong next to a luxury
+        // salon; the design's mock says "reservation fee".
+        "deposit-word": "reservation fee",
+      });
+    </script>
+  </body>
+</html>

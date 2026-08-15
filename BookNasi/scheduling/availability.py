@@ -132,6 +132,15 @@ class Busy:
     starts_at: datetime
     ends_at: datetime
     is_active: bool = True
+    #: Which appointment this span belongs to, as a string. Carried so that a
+    #: booking being *moved* can be excluded from the check that decides where
+    #: it may move to — see `is_free`. Without it a client rescheduling to
+    #: 11:00 on the same day is blocked by their own 10:00 booking, which is
+    #: the booking that is about to stop existing at 10:00.
+    #:
+    #: Defaulted so the many places that construct a `Busy` for a test or a
+    #: derived interval do not have to invent one.
+    appointment_id: str = ""
 
     def overlaps(self, other):
         return self.starts_at < other.ends_at and other.starts_at < self.ends_at
@@ -284,7 +293,7 @@ def _grid_starts(window, day, interval_minutes):
         candidate += step
 
 
-def blockers(facts, buffer_minutes, *, active_only=False):
+def blockers(facts, buffer_minutes, *, active_only=False, exclude_appointment_id=""):
     """Existing appointments, each holding its own trailing buffer — decision (b).
 
     `active_only` drops completed work, which the database would also let a
@@ -293,9 +302,16 @@ def blockers(facts, buffer_minutes, *, active_only=False):
     """
     padding = timedelta(minutes=buffer_minutes)
     return tuple(
-        Busy(b.starts_at, b.ends_at + padding, b.is_active)
+        Busy(b.starts_at, b.ends_at + padding, b.is_active, b.appointment_id)
         for b in facts.busy
-        if b.is_active or not active_only
+        # `and exclude_appointment_id` first, and it is load-bearing: `Busy`
+        # defaults `appointment_id` to `""` for every span built in a test or
+        # derived from a leave block, and the default for this parameter is also
+        # `""`. Comparing them without the truthiness guard excluded *every*
+        # unattributed busy span from every check — silently making the whole
+        # day look free.
+        if (b.is_active or not active_only)
+        and not (exclude_appointment_id and b.appointment_id == exclude_appointment_id)
     )
 
 
@@ -304,7 +320,15 @@ def _collides(blocked, starts_at, ends_at, buffer_minutes):
     return [busy for busy in blocked if candidate.overlaps(busy)]
 
 
-def is_free(facts, *, starts_at, duration_minutes, buffer_minutes, active_only=False):
+def is_free(
+    facts,
+    *,
+    starts_at,
+    duration_minutes,
+    buffer_minutes,
+    active_only=False,
+    exclude_appointment_id="",
+):
     """Does this span collide with anything already on this staff member's day?
 
     The one check no policy switches off — see `Policy`. Split out so that the
@@ -320,11 +344,16 @@ def is_free(facts, *, starts_at, duration_minutes, buffer_minutes, active_only=F
     if duration_minutes <= 0:
         return False
     ends_at = starts_at + timedelta(minutes=duration_minutes)
-    blocked = blockers(facts, buffer_minutes, active_only=active_only)
+    blocked = blockers(
+        facts,
+        buffer_minutes,
+        active_only=active_only,
+        exclude_appointment_id=exclude_appointment_id,
+    )
     return not _collides(blocked, starts_at, ends_at, buffer_minutes)
 
 
-def derive_slots(facts, *, duration_minutes, policy, now):
+def derive_slots(facts, *, duration_minutes, policy, now, exclude_appointment_id=""):
     """The bookable starts for one staff member, one service, one day.
 
     **The offer list.** Always bounded by the working window and always on the
@@ -357,7 +386,10 @@ def derive_slots(facts, *, duration_minutes, policy, now):
         return ()
 
     duration = timedelta(minutes=duration_minutes)
-    blocked = blockers(facts, facts.buffer_minutes)
+    # `exclude_appointment_id` is slice 7's reschedule: the booking being moved
+    # does not block the slot it is moving to. Empty for every other caller, and
+    # a `Busy` with no id can never match it.
+    blocked = blockers(facts, facts.buffer_minutes, exclude_appointment_id=exclude_appointment_id)
 
     slots = []
     for start in _grid_starts(window, facts.day, facts.slot_interval_minutes):
@@ -374,7 +406,9 @@ def derive_slots(facts, *, duration_minutes, policy, now):
     return tuple(slots)
 
 
-def is_bookable_start(facts, *, starts_at, duration_minutes, policy, now):
+def is_bookable_start(
+    facts, *, starts_at, duration_minutes, policy, now, exclude_appointment_id=""
+):
     """May this exact instant be written?
 
     CLAUDE.md §4: "Never trust a client-supplied slot as valid — always
@@ -400,6 +434,12 @@ def is_bookable_start(facts, *, starts_at, duration_minutes, policy, now):
 
     `now` is therefore unused on the relaxed branch, and stays in the signature
     because the caller does not know which branch it will take.
+
+    `exclude_appointment_id` is slice 7's reschedule: the booking being moved
+    must not block the slot it is moving to. Excluding it here rather than in
+    the caller keeps the write check and the offer list agreeing, which is the
+    whole point of this function — a client is shown their own 11:00 as free
+    and the write must not then refuse it.
     """
     if duration_minutes <= 0:
         return False
@@ -407,7 +447,11 @@ def is_bookable_start(facts, *, starts_at, duration_minutes, policy, now):
         return any(
             slot.starts_at == starts_at
             for slot in derive_slots(
-                facts, duration_minutes=duration_minutes, policy=policy, now=now
+                facts,
+                duration_minutes=duration_minutes,
+                policy=policy,
+                now=now,
+                exclude_appointment_id=exclude_appointment_id,
             )
         )
     return is_free(
@@ -416,4 +460,5 @@ def is_bookable_start(facts, *, starts_at, duration_minutes, policy, now):
         duration_minutes=duration_minutes,
         buffer_minutes=0,
         active_only=policy.allow_over_completed,
+        exclude_appointment_id=exclude_appointment_id,
     )

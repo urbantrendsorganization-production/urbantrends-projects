@@ -33,8 +33,11 @@ EXPECTED_PUBLIC_SHOP_FIELDS = {
     "accent_color",
     # Drives the visible hold countdown, which CLAUDE.md §10 forbids hiding.
     "hold_ttl_minutes",
-    # The refund rule is read before payment, never after.
+    # The refund rule is read before payment, never after. Both numbers the
+    # sentence is rendered from — CLAUDE.md §12 settled the terms on
+    # 14 August 2026 and §5 requires the client to read them before paying.
     "refund_window_hours",
+    "deposit_credit_days",
     "opening_hours",
 }
 

@@ -51,7 +51,7 @@ def release_expired_hold(appointment_id):
     everything, so it is harmless when the appointment was paid for, cancelled
     or swept in the meantime — which is the ordinary case, not the exception.
     """
-    from scheduling.holds import release_hold
+    from scheduling.holds import hold_is_releasable, release_hold
 
     # `.unscoped()`, the sanctioned escape from the tenant guard: a worker has
     # no request and therefore no organization, and the appointment id is what
@@ -62,11 +62,19 @@ def release_expired_hold(appointment_id):
         return "gone"
     if appointment.status != AppointmentStatus.PENDING_PAYMENT:
         return "resolved"
-    if appointment.hold_expires_at and appointment.hold_expires_at > timezone.now():
+    if not hold_is_releasable(appointment, now=timezone.now()):
+        # Two reasons to be here, and neither is an error.
+        #
         # Fired early — a clock skew between web and worker, or a re-delivery.
-        # Leaving it alone is correct: the sweep will take it a minute after it
-        # genuinely expires, and releasing a live hold would take a slot from a
-        # client who is mid-payment.
+        # Releasing a live hold would take a slot from a client who is
+        # mid-payment.
+        #
+        # Or the TTL has passed but an STK push is still unanswered and the
+        # grace window has not run out. Slice 6, and the whole reason `slotLost`
+        # is rare rather than routine — see `holds.hold_is_releasable`.
+        #
+        # Either way the sweep takes it within a minute of it becoming
+        # genuinely releasable, so there is nothing to reschedule here.
         return "not-yet"
 
     released = release_hold(appointment, expired=True)
@@ -93,12 +101,20 @@ def sweep_expired_holds():
         hold_expires_at__lte=now,
         hold_expires_at__gte=now - timedelta(hours=SWEEP_LOOKBACK_HOURS),
     )
-    from scheduling.holds import release_hold
+    from scheduling.holds import hold_is_releasable, release_hold
 
     count = 0
+    waiting = 0
     for appointment in stale:
+        # Slice 6's grace window. A hold with an unanswered STK push against it
+        # survives its TTL by `HOLD_GRACE_MINUTES` and no longer — the ceiling
+        # is derived from a timestamp nothing moves, so this loop cannot be
+        # kept waiting indefinitely by a client pressing Resend.
+        if not hold_is_releasable(appointment, now=now):
+            waiting += 1
+            continue
         if release_hold(appointment, now=now, expired=True):
             count += 1
-    if count:
-        logger.info("sweep released %s expired holds", count)
+    if count or waiting:
+        logger.info("sweep released %s expired holds, %s still in grace", count, waiting)
     return count

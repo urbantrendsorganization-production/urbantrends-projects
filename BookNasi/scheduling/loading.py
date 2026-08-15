@@ -89,7 +89,12 @@ def gather_shop_day(shop, day, *, staff=None):
         # with the interval, so the collision resolver can tell a chair that is
         # taken from time that was already worked. See scheduling/statuses.py.
         busy[appointment.staff_id].append(
-            Busy(appointment.starts_at, appointment.ends_at, appointment.is_active)
+            Busy(
+                appointment.starts_at,
+                appointment.ends_at,
+                appointment.is_active,
+                str(appointment.pk),
+            )
         )
 
     return {
