@@ -27,7 +27,8 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from payments.daraja import DarajaRejected, DarajaUnavailable, get_client
+from payments import tills
+from payments.daraja import DarajaMisconfigured, DarajaRejected, DarajaUnavailable
 from payments.machine import apply_payment_transition
 from payments.models import Payment
 from payments.settlement import confirm_from_result
@@ -70,7 +71,18 @@ def reconcile(payment, *, now=None):
     payment.save(update_fields=["query_attempts", "last_queried_at", "updated_at"])
 
     try:
-        result = get_client().query(payment.checkout_request_id)
+        # A Daraja query authenticates against the shortcode that took the
+        # push, so this has to be the same shop's credentials the push used —
+        # asking the platform account about a salon's checkout id is a rejection
+        # that would be recorded as "no answer from Safaricom".
+        result = tills.client_for(payment.appointment.shop).query(payment.checkout_request_id)
+    except DarajaMisconfigured as exc:
+        # The shop's connection has gone away since the push. Nothing to ask
+        # with, so this is not `query-failed` retried on a schedule; the sweep
+        # would fail identically every time until somebody fixes a setting.
+        logger.error("cannot query %s: %s", payment.support_code, exc)
+        _mark_unknown(payment, now=now)
+        return "no-credentials"
     except (DarajaUnavailable, DarajaRejected) as exc:
         logger.warning(
             "reconciliation query failed for %s: %s", payment.support_code, type(exc).__name__

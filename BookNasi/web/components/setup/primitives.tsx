@@ -144,7 +144,12 @@ export function TextInput({
   onChange: (value: string) => void;
   placeholder?: string;
   mono?: boolean;
-  type?: "text" | "url" | "time";
+  //: `password` is for the M-Pesa secrets. Not to stop the owner reading what
+  //: they are typing — they need to, it is a paste from the Safaricom portal —
+  //: but because a salon laptop is a shared screen with a counter in front of
+  //: it, and a passkey left visible in a form is a passkey anyone at the
+  //: counter can photograph.
+  type?: "text" | "url" | "time" | "password";
 }) {
   return (
     <input

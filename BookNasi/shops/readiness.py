@@ -46,8 +46,9 @@ is switched on yet, asked for by the screen that turns it on.
 
 from dataclasses import asdict, dataclass
 
+from core.mpesa import TILL as MPESA_TILL
 from shops.durations import ServiceNotOffered, resolve_duration
-from shops.models import OpeningHours, Service, Staff, WorkingHours
+from shops.models import CollectsVia, OpeningHours, Service, Staff, WorkingHours
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,40 @@ def _weekday_overlap_minutes(opening, working):
     if ends <= starts:
         return 0
     return (ends.hour * 60 + ends.minute) - (starts.hour * 60 + starts.minute)
+
+
+def _collection_detail(shop):
+    """Why this shop cannot take a deposit, in the owner's terms.
+
+    Three different sentences because they are three different problems and
+    only one of them is the owner's to fix. A shop on the platform account when
+    the deployment has none is our misconfiguration, and telling an owner to go
+    and connect something would send them looking for a screen that would not
+    help.
+    """
+    if shop.collects_via == CollectsVia.PLATFORM:
+        return (
+            "This shop is set to collect through BookNasi's own M-Pesa account, "
+            "which is not configured on this deployment. Contact support."
+        )
+    if not shop.mpesa_shortcode:
+        return (
+            "Deposits need somewhere to land. Add your Paybill or Till and the "
+            "Daraja keys from your Safaricom developer account."
+        )
+    return (
+        "Your M-Pesa details are half-filled in, so no deposit can be taken yet. "
+        "Nothing has been collected into the wrong account — a shop is never "
+        "quietly switched to somebody else's till."
+    )
+
+
+def _collection_summary(shop):
+    if shop.collects_via == CollectsVia.PLATFORM:
+        return "Deposits collect into the BookNasi platform account."
+    if shop.mpesa_transaction_type == MPESA_TILL:
+        return f"Deposits go to till {shop.mpesa_till_number}."
+    return f"Deposits go to paybill {shop.mpesa_shortcode}."
 
 
 def report_for(shop):
@@ -198,6 +233,17 @@ def report_for(shop):
                 else f"{len(bookable_services)} of {len(services)} bookable online."
             ),
             action="services",
+        ),
+        Check(
+            key="collects",
+            done=shop.can_take_deposits,
+            title="Connect your M-Pesa",
+            detail=(
+                _collection_detail(shop)
+                if not shop.can_take_deposits
+                else _collection_summary(shop)
+            ),
+            action="mpesa",
         ),
         Check(
             key="staff",

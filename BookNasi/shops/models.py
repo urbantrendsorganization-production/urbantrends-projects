@@ -10,14 +10,19 @@ Two helpers here are imported by slice 3 and must not be reimplemented there:
 `durations.resolve_duration` and `money.deposit_amount`.
 """
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import F, Q
 
 from accounts.phone import normalize_phone
+from core import secrets
 from core.managers import OrgScopedQuerySet
 from core.models import OrgDerivedModel, OrgScopedModel
+from core.mpesa import PAYBILL as MPESA_PAYBILL
+from core.mpesa import TILL as MPESA_TILL
+from core.mpesa import validate_shortcode
 from shops.durations import resolve_duration
 from shops.integrity import DepositIntegrityMixin, UnguardedServiceQuerySet
 from shops.money import (
@@ -43,6 +48,18 @@ class Weekday(models.IntegerChoices):
     FRIDAY = 4, "Friday"
     SATURDAY = 5, "Saturday"
     SUNDAY = 6, "Sunday"
+
+
+class CollectsVia(models.TextChoices):
+    """Whose M-Pesa account a shop's deposits land in.
+
+    Two values and no third. "Not configured yet" is `OWN` with empty
+    credentials, which is a shop that cannot take a public booking — not a shop
+    that quietly falls back to ours. See `Shop.collects_via`.
+    """
+
+    OWN = "own", "The shop's own M-Pesa"
+    PLATFORM = "platform", "The BookNasi platform account"
 
 
 class Shop(OrgScopedModel):
@@ -131,6 +148,67 @@ class Shop(OrgScopedModel):
         ),
     )
 
+    # ------------------------------------------------- whose till the money hits
+    #
+    # Added at slice 13. Until then `MPESA_SHORTCODE` was environment-level, so
+    # every shop on a deployment collected into the same account — fine for a
+    # single-tenant pilot and wrong for the SaaS front door in CLAUDE.md §1,
+    # where a salon's deposits must reach the salon.
+    #
+    # `collects_via` is explicit rather than inferred from whether the columns
+    # below are filled in. Inferring it means a shop that types its shortcode,
+    # gets interrupted before the passkey, and takes a booking that evening
+    # collects a real client's deposit into *our* till while every screen says
+    # it is fine. An enum makes the platform till something an owner is on
+    # deliberately, and makes half-finished setup a state the readiness check
+    # can see and refuse. The migration puts every pre-slice-13 shop on
+    # PLATFORM, because that is factually where their money has been going.
+    collects_via = models.CharField(
+        max_length=8,
+        choices=CollectsVia,
+        default=CollectsVia.OWN,
+        help_text="Whose M-Pesa account deposits land in. New shops must connect their own.",
+    )
+
+    # Not secret: a paybill number is printed on posters, and a till number is
+    # on the sticker by the counter. They are identifiers, not credentials, and
+    # encrypting them would only make them unsearchable.
+    mpesa_shortcode = models.CharField(
+        max_length=12,
+        blank=True,
+        validators=[validate_shortcode],
+        help_text=(
+            "Paybill: the paybill number. Till: the store / head office number, "
+            "which is not the till number. The password is derived from this in both cases."
+        ),
+    )
+    mpesa_till_number = models.CharField(
+        max_length=12,
+        blank=True,
+        validators=[validate_shortcode],
+        help_text="Where BuyGoods money actually lands. Required when the type is a till.",
+    )
+    mpesa_transaction_type = models.CharField(
+        max_length=32,
+        blank=True,
+        choices=(
+            (MPESA_PAYBILL, "Paybill"),
+            (MPESA_TILL, "Till (Buy Goods)"),
+        ),
+        help_text="Blank means paybill, matching the deployment-level default.",
+    )
+
+    # Secret. `core/secrets.py` says why these are sealed rather than stored:
+    # the threat is a copy of the database leaving without the key, which is
+    # every backup, dump and restored snapshot.
+    mpesa_consumer_key_enc = models.BinaryField(blank=True, default=bytes, editable=False)
+    mpesa_consumer_secret_enc = models.BinaryField(blank=True, default=bytes, editable=False)
+    mpesa_passkey_enc = models.BinaryField(blank=True, default=bytes, editable=False)
+    #: Which key in `MPESA_CREDENTIAL_KEYS` sealed the three above. Recorded so a
+    #: later re-encryption pass can find the rows it has not done yet with a
+    #: `WHERE` rather than by decrypting every shop.
+    mpesa_key_id = models.CharField(max_length=32, blank=True, editable=False)
+
     is_active = models.BooleanField(default=True)
 
     class Meta:
@@ -163,6 +241,25 @@ class Shop(OrgScopedModel):
                 condition=Q(min_deposit_amount__gte=1, min_deposit_amount__lte=MAX_MIN_DEPOSIT),
                 name="shop_min_deposit_sane",
             ),
+            models.CheckConstraint(
+                condition=Q(collects_via__in=[c.value for c in CollectsVia]),
+                name="shop_collects_via_known",
+            ),
+            # A shop collecting into its own Buy Goods account must carry the
+            # till number. `payments/daraja.py` already refuses to push without
+            # one — because `PartyB` would otherwise be the store number and the
+            # deposit would land somewhere the shop is not looking — but it
+            # refuses one booking at a time, at the moment a client is being
+            # asked for money. This is the same rule the deployment-level check
+            # in `config/settings/prod.py` applies at boot, at the only place a
+            # per-shop version of it can live.
+            models.CheckConstraint(
+                condition=(
+                    ~Q(collects_via=CollectsVia.OWN, mpesa_transaction_type=MPESA_TILL)
+                    | ~Q(mpesa_till_number="")
+                ),
+                name="shop_own_till_has_a_till_number",
+            ),
         ]
 
     def __str__(self):
@@ -172,6 +269,88 @@ class Shop(OrgScopedModel):
         if self.phone:
             self.phone = normalize_phone(self.phone)
         return super().save(*args, **kwargs)
+
+    # ------------------------------------------------------- m-pesa credentials
+    #
+    # Sealed on the way in and opened on the way out, both here, so no caller
+    # has to remember to. The plaintext is never an attribute on the instance:
+    # a `mpesa_passkey` property with a cached value is one `repr()`, one
+    # `model_to_dict`, one DRF serializer that got `fields = "__all__"` away
+    # from being in a log. Reading it is a method call that has to be written
+    # out, and there is exactly one caller (`payments/tills.py`).
+
+    def seal_mpesa_credentials(self, *, consumer_key=None, consumer_secret=None, passkey=None):
+        """Encrypt whatever was supplied. `None` leaves a field alone.
+
+        `None` and `""` differ and the difference matters: an owner editing the
+        shortcode alone sends no passkey and must keep the one they have, while
+        an owner clearing the field is disconnecting the shop. A single sentinel
+        for both would make one of those impossible.
+
+        Does not save — the caller is inside a serializer's `update`, and a
+        write here would be a second one.
+        """
+        for value, ciphertext_field in (
+            (consumer_key, "mpesa_consumer_key_enc"),
+            (consumer_secret, "mpesa_consumer_secret_enc"),
+            (passkey, "mpesa_passkey_enc"),
+        ):
+            if value is None:
+                continue
+            ciphertext, key_id = secrets.seal(value)
+            setattr(self, ciphertext_field, ciphertext)
+            if key_id:
+                self.mpesa_key_id = key_id
+
+        if not any(
+            (
+                self.mpesa_consumer_key_enc,
+                self.mpesa_consumer_secret_enc,
+                self.mpesa_passkey_enc,
+            )
+        ):
+            # Nothing sealed any more, so the key id is a claim about a row that
+            # no longer exists. Left behind, it would send the re-encryption
+            # pass looking for ciphertext that is not there.
+            self.mpesa_key_id = ""
+
+    def open_mpesa_credentials(self):
+        """`(consumer_key, consumer_secret, passkey)` in the clear.
+
+        Raises `core.secrets.CannotUnseal` rather than returning blanks for a
+        row it cannot open: blanks would read as "this shop has not connected
+        M-Pesa yet" and send the booking down the not-configured path, which is
+        a different and much quieter wrong answer than "this shop's credentials
+        are unreadable and somebody must be told".
+        """
+        return (
+            secrets.unseal(self.mpesa_consumer_key_enc, self.mpesa_key_id),
+            secrets.unseal(self.mpesa_consumer_secret_enc, self.mpesa_key_id),
+            secrets.unseal(self.mpesa_passkey_enc, self.mpesa_key_id),
+        )
+
+    @property
+    def has_own_mpesa_credentials(self):
+        """Every part present. Not "some part present" — see `collects_via`."""
+        return bool(
+            self.mpesa_shortcode
+            and self.mpesa_consumer_key_enc
+            and self.mpesa_consumer_secret_enc
+            and self.mpesa_passkey_enc
+            and (self.mpesa_transaction_type != MPESA_TILL or self.mpesa_till_number)
+        )
+
+    @property
+    def can_take_deposits(self):
+        """Is there an account for a deposit to land in at all?
+
+        The platform till is configured at deployment level and is either there
+        for every shop or none, so `PLATFORM` asks the settings; `OWN` asks the
+        row. `shops/readiness.py` turns this into a sentence.
+        """
+        if self.collects_via == CollectsVia.PLATFORM:
+            return bool(settings.MPESA["SHORTCODE"] and settings.MPESA["PASSKEY"])
+        return self.has_own_mpesa_credentials
 
     def is_open_on(self, day):
         """Does this shop open at all on this date?

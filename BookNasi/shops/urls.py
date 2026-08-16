@@ -26,6 +26,17 @@ urlpatterns = [
         views.ShopReadinessView.as_view(),
         name="shop-readiness",
     ),
+    # Owner-only: whose M-Pesa account this shop's deposits land in.
+    path(
+        "orgs/<uuid:org_id>/shops/<uuid:shop_id>/mpesa/",
+        views.ShopMpesaView.as_view(),
+        name="shop-mpesa",
+    ),
+    path(
+        "orgs/<uuid:org_id>/shops/<uuid:shop_id>/mpesa/disconnect/",
+        views.ShopMpesaDisconnectView.as_view(),
+        name="shop-mpesa-disconnect",
+    ),
     # Shop children
     path(
         "orgs/<uuid:org_id>/shops/<uuid:shop_id>/opening-hours/",

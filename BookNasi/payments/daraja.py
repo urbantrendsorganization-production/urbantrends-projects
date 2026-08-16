@@ -28,6 +28,7 @@ only, which is enough to trace anything with.
 """
 
 import base64
+import hashlib
 import json
 import logging
 import time
@@ -38,6 +39,8 @@ from datetime import UTC, datetime, timedelta
 
 from django.conf import settings
 from django.utils.module_loading import import_string
+
+from core import mpesa
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +54,13 @@ class DarajaUnavailable(Exception):
     """
 
 
-#: The two STK transaction types. Mirrored from `config.settings.base` rather
-#: than imported, so this module stays importable without Django settings for
-#: the same reason the rest of it avoids them where it can.
-PAYBILL = "CustomerPayBillOnline"
-TILL = "CustomerBuyGoodsOnline"
+#: The two STK transaction types. Re-exported from `core.mpesa`, which holds no
+#: models and reads no settings, so importing it costs this module none of the
+#: independence the mirror was protecting — and slice 13 gave `shops.Shop` a
+#: third need for the same two strings, at which point a copy stopped being
+#: defensible.
+PAYBILL = mpesa.PAYBILL
+TILL = mpesa.TILL
 
 
 class DarajaMisconfigured(Exception):
@@ -299,8 +304,20 @@ class FakeDarajaClient:
     they run in production.
     """
 
+    #: Shared by every shop rather than built per credential set. One place to
+    #: arm an error and one list of recorded pushes is what a test wants; the
+    #: token reuse the real cache exists for is meaningless here. `build_client`
+    #: reads this attribute rather than sniffing the class name, so a stand-in
+    #: somebody adds later opts in deliberately.
+    shared_across_shops = True
+
     pushes: list = field(default_factory=list)
     queries: list = field(default_factory=list)
+    query_shortcodes: list = field(default_factory=list)
+    #: Whatever `build_client` last handed over. Recorded on each push below,
+    #: because "which till did this deposit go to" is the question slice 13
+    #: exists to answer and it is unanswerable from amount and phone alone.
+    config: dict = field(default_factory=dict)
     #: Set to a `DarajaUnavailable` or `DarajaRejected` to make the next push
     #: behave that way. The two are very different states and both need testing.
     push_error: Exception | None = None
@@ -310,7 +327,15 @@ class FakeDarajaClient:
 
     def push(self, *, amount, phone, reference, description):
         self.pushes.append(
-            {"amount": amount, "phone": phone, "reference": reference, "desc": description}
+            {
+                "amount": amount,
+                "phone": phone,
+                "reference": reference,
+                "desc": description,
+                "shortcode": self.config.get("SHORTCODE", ""),
+                "till_number": self.config.get("TILL_NUMBER", ""),
+                "transaction_type": self.config.get("TRANSACTION_TYPE", ""),
+            }
         )
         if self.push_error is not None:
             error, self.push_error = self.push_error, None
@@ -324,6 +349,11 @@ class FakeDarajaClient:
 
     def query(self, checkout_request_id):
         self.queries.append(checkout_request_id)
+        # Alongside rather than inside `queries`, whose shape a dozen existing
+        # tests assert on directly. A Daraja query authenticates against the
+        # shortcode, so asking about a shop's payment with the platform's
+        # credentials is its own bug and needs its own observation point.
+        self.query_shortcodes.append(self.config.get("SHORTCODE", ""))
         if self.query_error is not None:
             error, self.query_error = self.query_error, None
             raise error
@@ -333,23 +363,88 @@ class FakeDarajaClient:
         return QueryResult(result_code=None, result_desc="still processing")
 
 
-_client = None
+#: Real clients, by a hash of the credentials they hold. See `build_client`.
+_clients = {}
+#: The single stand-in, shared by every shop. See `build_client`.
+_stand_in = None
+
+#: Past this many distinct credential sets, the cache is dropped rather than
+#: grown. Each entry is a few hundred bytes and an OAuth token, so the number is
+#: about never leaking unboundedly rather than about memory: a deployment with
+#: more live tills than this is one where the oldest token was going to expire
+#: unused anyway, and rebuilding a client costs one extra round trip.
+MAX_CACHED_CLIENTS = 256
+
+
+def _cache_key(config):
+    """A hash, not the credentials.
+
+    The client holds the plaintext either way, so this conceals nothing from an
+    attacker with the process. What it does is keep a passkey out of every
+    place a dict's *keys* surface without its values — a `repr`, a memory dump,
+    a debugger's locals pane, an exception rendered by a middleware.
+    """
+    material = "|".join(
+        str(config.get(field, ""))
+        for field in (
+            "BASE_URL",
+            "CONSUMER_KEY",
+            "CONSUMER_SECRET",
+            "SHORTCODE",
+            "PASSKEY",
+            "TRANSACTION_TYPE",
+            "TILL_NUMBER",
+        )
+    )
+    return hashlib.sha256(material.encode()).hexdigest()
+
+
+def build_client(config):
+    """The client for one set of credentials.
+
+    Cached because `DarajaClient` holds an access token worth reusing — minting
+    one per push doubles every round trip on the leg where the whole latency
+    budget lives. Keyed by the credentials rather than by shop, so an owner who
+    corrects a mistyped consumer secret is served a new client on the next push
+    instead of one holding a token minted with the old one.
+
+    A stand-in is shared across every shop regardless of config. `settings`
+    selects it, `FakeDarajaClient.shared_across_shops` declares it, and the
+    sharing is what a test needs: one place to arm an error and one list of
+    recorded pushes. The config still travels — the fake records the shortcode
+    each push went to, which is how per-shop routing is asserted at all.
+    """
+    global _stand_in
+    client_class = import_string(settings.MPESA_CLIENT)
+
+    if getattr(client_class, "shared_across_shops", False):
+        if _stand_in is None:
+            _stand_in = client_class()
+        _stand_in.config = dict(config)
+        return _stand_in
+
+    key = _cache_key(config)
+    if key not in _clients:
+        if len(_clients) >= MAX_CACHED_CLIENTS:
+            _clients.clear()
+        _clients[key] = client_class(config)
+    return _clients[key]
 
 
 def get_client():
-    """The process-wide client.
+    """The client for the deployment's own credentials.
 
-    Cached because `DarajaClient` holds an access token worth reusing — minting
-    one per push doubles every round trip on a connection where that is the
-    whole latency budget.
+    Since slice 13 this is the *platform* till specifically, not "the" client:
+    a shop collecting into its own account is reached through
+    `payments.tills.client_for`. Kept because the platform account is still a
+    real destination (`Shop.CollectsVia.PLATFORM`) and because a test that only
+    wants to observe pushes should not have to invent a shop first.
     """
-    global _client
-    if _client is None:
-        _client = import_string(settings.MPESA_CLIENT)()
-    return _client
+    return build_client(settings.MPESA)
 
 
 def reset_client():
-    """Drop the cached client. For tests, and for a settings override."""
-    global _client
-    _client = None
+    """Drop every cached client. For tests, and for a settings override."""
+    global _stand_in
+    _stand_in = None
+    _clients.clear()

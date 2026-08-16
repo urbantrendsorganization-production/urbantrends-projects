@@ -74,9 +74,21 @@ function Dot({ done }: { done: boolean }) {
 export function Checklist({
   readiness,
   onGo,
+  reachable,
 }: {
   readiness: Readiness;
   onGo: (section: string) => void;
+  /**
+   * Sections this person can actually open. Omit for "all of them".
+   *
+   * Added at slice 13, because M-Pesa is the first check whose fix is behind a
+   * role the reader may not have: a manager sees "Connect your M-Pesa"
+   * outstanding and there is no tab for it. A Fix button that silently blanks
+   * the screen is worse than the honest sentence, and hiding the row entirely
+   * would be worse still — the shop genuinely is not bookable, and a checklist
+   * that reports it as fine because of who is looking is a checklist that lies.
+   */
+  reachable?: string[];
 }) {
   const outstanding = readiness.checks.filter((check) => !check.done);
 
@@ -133,6 +145,18 @@ export function Checklist({
                 style={{ color: "var(--bn-ink-45)", fontSize: "var(--bn-text-body-sm-size)" }}
               >
                 Done
+              </span>
+            ) : reachable && !reachable.includes(check.action) ? (
+              <span
+                style={{
+                  color: "var(--bn-ink-45)",
+                  fontSize: "var(--bn-text-body-sm-size)",
+                  textAlign: "right",
+                  flexShrink: 0,
+                  maxWidth: "12em",
+                }}
+              >
+                Ask the owner
               </span>
             ) : (
               <button

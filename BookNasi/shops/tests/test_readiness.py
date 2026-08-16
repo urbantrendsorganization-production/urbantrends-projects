@@ -62,6 +62,7 @@ class TestABrandNewShop:
             "hours",
             "services",
             "deposits",
+            "collects",
             "staff",
             "rosters",
             "skills",
@@ -81,6 +82,7 @@ class TestABrandNewShop:
             "hours",
             "services",
             "deposits",
+            "collects",
             "staff",
             "rosters",
             "skills",
@@ -228,6 +230,7 @@ class TestItOnlyEverDescribesItsOwnShop:
             "hours",
             "services",
             "deposits",
+            "collects",
             "staff",
             "rosters",
             "skills",
@@ -283,7 +286,7 @@ class TestTheShapeIsStable:
             assert check["key"]
             assert check["title"]
             assert check["detail"]
-            assert check["action"] in {"shop", "hours", "services", "staff"}
+            assert check["action"] in {"shop", "hours", "services", "staff", "mpesa"}
             assert isinstance(check["done"], bool)
 
     def test_is_bookable_is_exactly_every_check_passing(self, shop_setup, org_a):
@@ -308,6 +311,7 @@ class TestOpeningHoursOnly:
         assert keys_failing(report) == {
             "services",
             "deposits",
+            "collects",
             "staff",
             "rosters",
             "skills",

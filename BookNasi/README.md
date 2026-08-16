@@ -28,6 +28,7 @@ BookNasi takes an **M-Pesa deposit at booking time**. A no-show becomes partial 
 
 **Payments**
 - M-Pesa STK push for deposits at confirmation
+- Per-shop Paybill or Till, so a salon's deposits reach the salon
 - Slot held pending payment with automatic release on timeout
 - Idempotent callback handling
 - Per-service deposit rules: flat, percentage, or none
@@ -125,7 +126,8 @@ Concurrency tests around availability and payment callbacks are part of the suit
 | `DATABASE_URL` | Postgres connection string |
 | `REDIS_URL` | Cache + Celery broker |
 | `MPESA_CONSUMER_KEY` / `MPESA_CONSUMER_SECRET` | Daraja app credentials |
-| `MPESA_SHORTCODE` / `MPESA_PASSKEY` | Till/paybill and STK passkey |
+| `MPESA_SHORTCODE` / `MPESA_PASSKEY` | The **platform** till/paybill and STK passkey |
+| `MPESA_CREDENTIAL_KEYS` | `id:key` pairs that encrypt each shop's own credentials |
 | `MPESA_CALLBACK_URL` | Public HTTPS callback endpoint |
 | `SMS_API_KEY` / `SMS_SENDER_ID` | Messaging provider |
 | `ALLOWED_HOSTS` | Comma-separated |
@@ -147,6 +149,8 @@ Never commit a filled `.env`. Sandbox credentials are still credentials.
 **The widget is a renderer, not a second app.** The booking flow's state machine lives in `web/packages/booking-core`, framework-free and enforced as such, so the embedded widget and the hosted page make the same decisions from the same code. The widget renders it in ~12 kB with no framework, inside a shadow root — which is what lets a host restyle it by named token while its stylesheet cannot reach the 52 px targets, the three-per-row slot grid, the hold countdown or the `*334#` line.
 
 **Cross-origin access is `/api/public/` only**, with credentials never allowed and the caller's origin never reflected. The org-scoped `/api/v1/` gets no CORS header at all; the same-origin policy is a control there.
+
+**Each shop collects into its own M-Pesa.** Shortcode, transaction type and till number live on `Shop`; the Daraja passkey and consumer secret live there too, encrypted with a key from the environment (`core/secrets.py`). `payments/tills.py` resolves them per booking, and a shop that has not connected an account cannot take a deposit rather than falling back to anybody else's till. One callback URL still serves every shop, because Safaricom's `CheckoutRequestID` is unique platform-wide and carries no shortcode.
 
 **"Is this shop bookable yet" is derived, not stored.** `shops/readiness.py` answers it from the same rule the availability engine composes from, because the surprising parts — a missing `StaffService` row meaning "does not offer this", a deposit-free service being unbookable online, a shift too short for anything the stylist does — are exactly what a second implementation in the settings screen would get wrong.
 

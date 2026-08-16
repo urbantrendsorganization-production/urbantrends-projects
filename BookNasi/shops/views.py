@@ -15,6 +15,7 @@ from shops.models import (
     StaffService,
     WorkingHours,
 )
+from shops.mpesa_serializers import ShopMpesaSerializer
 from shops.serializers import (
     LeaveSerializer,
     OpeningHoursSerializer,
@@ -331,3 +332,63 @@ class ShopReadinessView(ShopScopedMixin, APIView):
 
     def get(self, request, org_id, shop_id):
         return Response(readiness.report_for(self.shop))
+
+
+class ShopMpesaView(ShopScopedMixin, APIView):
+    """Whose M-Pesa account this shop's deposits land in.
+
+    **Owner only**, unlike every other endpoint in this file. See
+    `core/tenancy.OrgScopedMixin.owner_role_required`: a manager already sets
+    prices and deposit rules and so decides how much is taken, but repointing
+    where it goes is a different act and a quiet one — the number is masked on
+    the way back out, so nobody else on the account could see it had changed.
+
+    GET returns the connection with the secrets masked. PATCH writes it.
+    """
+
+    owner_role_required = True
+
+    def get(self, request, org_id, shop_id):
+        return Response(ShopMpesaSerializer(self.shop).data)
+
+    def patch(self, request, org_id, shop_id):
+        serializer = ShopMpesaSerializer(self.shop, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class ShopMpesaDisconnectView(ShopScopedMixin, APIView):
+    """Stop collecting into this shop's own account.
+
+    A named action rather than a PATCH of four empty strings, because a stale
+    form or a half-loaded screen can send the second by accident and the result
+    — a shop that silently stops taking deposits — is indistinguishable from
+    the shop working until a client tries to pay.
+
+    Clears the credentials rather than only flipping `collects_via`. A shop that
+    disconnects has usually rotated or lost the keys; keeping ciphertext nobody
+    can vouch for around is a row that will be reconnected by accident later.
+    """
+
+    owner_role_required = True
+
+    def post(self, request, org_id, shop_id):
+        shop = self.shop
+        shop.mpesa_shortcode = ""
+        shop.mpesa_till_number = ""
+        shop.mpesa_transaction_type = ""
+        shop.seal_mpesa_credentials(consumer_key="", consumer_secret="", passkey="")
+        shop.save(
+            update_fields=[
+                "mpesa_shortcode",
+                "mpesa_till_number",
+                "mpesa_transaction_type",
+                "mpesa_consumer_key_enc",
+                "mpesa_consumer_secret_enc",
+                "mpesa_passkey_enc",
+                "mpesa_key_id",
+                "updated_at",
+            ]
+        )
+        return Response(ShopMpesaSerializer(shop).data)
