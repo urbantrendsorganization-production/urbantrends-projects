@@ -16,18 +16,34 @@ is a red build rather than a screen that renders beautifully and does nothing.
 A browser test would catch this and cost two servers, a headless Chrome and a
 minute per run. The defect is a *string*, and a string can be checked in
 milliseconds with nothing running. The things a browser catches that this
-cannot — a credentialed cross-origin request, a missing CSRF cookie — are not
-about which URLs exist, and `npm run smoke` covers those separately and
-deliberately outside CI.
+cannot are not about which URLs exist and are covered where they belong:
+`core/tests/test_csrf_origin.py` does the two things the rest of the suite
+deliberately does not — logs in for a real session cookie, and sends the
+`Origin` header a browser sends — and `core/tests/test_cors.py` asserts the two
+absences on `/api/v1/`.
 
-## The one assertion that makes it hold
+## The two assertions that make it hold
 
-`test_every_request_goes_through_a_known_helper`. Extracting call sites only
-works if the extractor knows every way the frontend makes a request; a new
-screen hand-rolling its own `fetch` would be invisible to the rest of this file
-and would be exactly the shape of the bug it exists to catch. So the helpers are
-enumerated, and any `fetch(` outside them fails until somebody either routes it
-through a helper or adds it here on purpose.
+Both in `TestTheExtractorCannotBeBypassed`, and between them they say: every
+request is one this file can *see*, and one whose URL it can *work out*. Either
+half missing turns the check above into a check over a smaller set than
+somebody reading it would assume.
+
+`test_every_request_goes_through_a_known_helper` is the seeing half. The
+helpers are enumerated in `WRAPPERS`, and `full_url` has no base for a helper it
+does not know, so it returns `None` and the path is skipped — meaning a screen
+hand-rolling `fetch("/api/v1/…")` would be invisible to the rest of this file,
+which is exactly the shape of the bug it exists to catch. A bare `fetch` is
+therefore allowed in only two forms, both of which stay visible: the wrappers'
+own `` `${BASE}${path}` `` templates, and a call that builds its own base from a
+constant this file can expand — `` fetch(`${PUBLIC_ROOT}/shops/…`) `` on the
+manage page's availability lookup. Anything else fails until somebody routes it
+through a helper or adds it to `WRAPPERS` on purpose.
+
+`test_every_call_sites_url_can_actually_be_worked_out` is the working-out half:
+a path still beginning with an unresolved `${…}` after expansion — a base from
+a prop, an import, a function argument — is one this file silently skips, and a
+silent skip is how a test ends up guarding nothing.
 """
 
 import re
@@ -99,6 +115,11 @@ CALL = re.compile(
 
 #: An interpolation, and the base constants that are not path segments.
 INTERPOLATION = re.compile(r"\$\{[^{}]*\}")
+
+#: A template that is nothing *but* interpolations — `` `${ROOT}${path}` `` — is
+#: a wrapper's own body rather than an endpoint. Named once because two things
+#: need it: `full_url` skips it, and the bare-`fetch` check has to allow it.
+ONLY_INTERPOLATIONS = re.compile(r"(?:\$\{[^{}]*\})+")
 
 
 def public_api_prefix():
@@ -210,7 +231,7 @@ def full_url(helper, path, consts, bases):
     the wrapper itself rather than an endpoint, and is skipped: its argument is
     checked wherever it is called.
     """
-    if re.fullmatch(r"(\$\{[^{}]*\})+", path):
+    if ONLY_INTERPOLATIONS.fullmatch(path):
         return None
     if path.startswith("${"):
         return expand(path, consts)
@@ -284,6 +305,56 @@ class TestEveryPathResolves:
 
 
 class TestTheExtractorCannotBeBypassed:
+    def test_every_request_goes_through_a_known_helper(self):
+        """No request is invisible to the check above.
+
+        `full_url` looks a helper up in `WRAPPERS` and returns `None` when it
+        finds nothing, so a screen that calls `fetch("/api/v1/…")` directly is
+        not caught by this file — it is *skipped* by it, which is worse, because
+        the skip looks identical to a clean run. That is the shape of the defect
+        this file was written for: the manage page hand-rolled its fetches and
+        asked for a prefix that did not exist.
+
+        Two forms of bare `fetch` stay legible and are allowed. A wrapper's own
+        `` `${BASE}${path}` `` body is not an endpoint and is checked wherever it
+        is called. And a call that builds its own base from a constant this file
+        can expand is fully resolved by `full_url` — `` `${PUBLIC_ROOT}/shops/…` ``
+        on the manage page's availability lookup is the one that does this.
+
+        Anything else — a literal path on an unknown helper — fails here until
+        it goes through a wrapper or the wrapper is added to `WRAPPERS`.
+        """
+        bases = wrapper_bases()
+        loose = []
+        for file, line, helper, path, _consts in call_sites():
+            if helper in bases:
+                continue
+            if ONLY_INTERPOLATIONS.fullmatch(path) or path.startswith("${"):
+                continue
+            loose.append(f"{file}:{line} {helper}({path!r})")
+
+        assert not loose, (
+            "requests this file cannot see — route them through a helper in "
+            "lib/api.ts, or add the helper to WRAPPERS:\n  " + "\n  ".join(loose)
+        )
+
+    def test_a_hand_rolled_fetch_would_be_caught(self):
+        """The assertion above, asserted.
+
+        Every current call site passes it, which is also what a test that
+        checked nothing would look like. So this feeds it the shape it exists to
+        refuse and confirms it refuses it — the same reason
+        `test_the_manage_screens_paths_resolve_under_the_public_prefix` ends by
+        checking the bare path does *not* resolve.
+        """
+        bases = wrapper_bases()
+
+        assert "fetch" not in bases, "a base for `fetch` would make the check above vacuous"
+        assert full_url("fetch", "/api/v1/orgs/", {}, bases) is None, (
+            "an unknown helper's path is skipped rather than checked, which is "
+            "the whole reason the check above has to exist"
+        )
+
     def test_every_call_sites_url_can_actually_be_worked_out(self):
         """No request is opaque to the check above.
 
