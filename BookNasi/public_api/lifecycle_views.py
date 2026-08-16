@@ -30,6 +30,7 @@ subject to the same header.
 
 import logging
 
+from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
@@ -37,6 +38,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from clients import erasure
 from payments.credit import Credit, CreditSource
 from public_api.serializers import ManageViewSerializer
 from scheduling import lifecycle, manage_tokens
@@ -133,6 +135,55 @@ class ManageCancelView(ManageBaseView):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+@method_decorator(csrf_exempt, name="dispatch")
+class ManageForgetMeView(ManageBaseView):
+    """`POST /api/public/v1/manage/<token>/forget-me/` — the client asks.
+
+    CLAUDE.md §9 gives a data subject a delete path, and until slice 14 the only
+    one was ringing the salon. The manage token is the natural place for it: it
+    is the session (§12), and it proves control of the phone number — the same
+    verification the deposit relies on.
+
+    **It records a request; it does not erase.** Two reasons, and the second is
+    the one that decided it:
+
+    - Erasure is irreversible and voids any unspent credit. One tap on a phone,
+      on a link that arrived by SMS, is too easy a way to reach that — and
+      unlike cancelling, there is no version of it the shop can undo.
+    - The organization is the controller (§9), so the obligation is theirs to
+      discharge and the record of discharging it is theirs to hold. A silent
+      automatic scrub would leave them with nothing to show a regulator except
+      an absence.
+
+    Idempotent, and it keeps the first timestamp. The DPA clock starts when the
+    person asked, not when they last pressed the button, so a second tap must
+    not restart it — that would let a shop reset its own deadline by prompting.
+    """
+
+    throttle_scope = "manage-forget-me"
+
+    def post(self, request, token):
+        appointment = self.get_appointment(token)
+        client = appointment.client
+        if client is None:
+            # A walk-in with no client row. Nothing personal is held, so there
+            # is nothing to ask about — and answering differently here would
+            # tell an anonymous caller whether a record existed.
+            return Response({"requested": True, "statement": erasure.retention_statement()})
+
+        if client.erasure_requested_at is None:
+            client.erasure_requested_at = timezone.now()
+            client.save(update_fields=["erasure_requested_at", "updated_at"])
+
+        return Response(
+            {
+                "requested": True,
+                "requested_at": client.erasure_requested_at.isoformat(),
+                "statement": erasure.retention_statement(),
+            }
+        )
+
+
 class ManageRescheduleView(ManageBaseView):
     """`POST /api/public/v1/manage/<token>/reschedule/`
 

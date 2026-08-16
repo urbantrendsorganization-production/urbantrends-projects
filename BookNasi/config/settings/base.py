@@ -138,6 +138,20 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 3600.0,
         "options": {"expires": 3500.0},
     },
+    # Slice 14. The retention period in CLAUDE.md §9, enforced rather than
+    # merely stated — a policy nothing executes is a sentence in a privacy
+    # notice, and the DPA asks what a controller *does*.
+    #
+    # Daily, and deliberately not more often. The boundary is two years wide;
+    # running it hourly would be twenty-four scans a day of a table to find the
+    # handful of rows that crossed a line nobody can perceive the exact moment
+    # of. `expires` is generous for the same reason — a sweep skipped because
+    # Beat was down for an hour catches up tomorrow with nothing lost.
+    "scrub-clients-past-retention": {
+        "task": "clients.scrub_expired_clients",
+        "schedule": 86400.0,
+        "options": {"expires": 82800.0},
+    },
 }
 
 AUTH_USER_MODEL = "accounts.User"
@@ -212,6 +226,13 @@ REST_FRAMEWORK = {
         # other two at exactly the wrong moment.
         "manage-cancel": "10/hour",
         "manage-reschedule": "20/hour",
+        # Slice 14. Its own scope, following the rule above rather than sharing
+        # with cancel: asking to be forgotten and cancelling a booking are the
+        # two things a client must be able to do no matter what else they have
+        # spent, and a data-protection right is a poor thing to ration behind
+        # somebody else's rescheduling. Idempotent anyway — a second request
+        # keeps the first timestamp — so the ceiling is about load, not abuse.
+        "manage-forget-me": "10/hour",
         "payment-repoint": "20/hour",
         # Resend is bounded per appointment in `payments/stk.py`, which is the
         # real control. This is the same crude per-IP ceiling as above, and is
@@ -316,6 +337,20 @@ MPESA_CALLBACK_TOKEN = env("MPESA_CALLBACK_TOKEN", "local-callback-token")
 #: requires it, because a production deployment that cannot seal is one that
 #: would otherwise have to store a live till credential in the clear.
 MPESA_CREDENTIAL_KEYS = env_list("MPESA_CREDENTIAL_KEYS")
+
+# --------------------------------------------------------------- slice 14
+
+#: CLAUDE.md §9's "stated retention period", as a number the code enforces
+#: rather than a sentence in a policy document. Twenty-four months after a
+#: client's last appointment, then name, number and notes are removed and the
+#: bookings stay without them.
+#:
+#: Settable so a deployment under a different regulator can shorten it; there is
+#: deliberately no way to switch it off, because "kept indefinitely" is the one
+#: answer §9 does not allow. `clients/erasure.retention_statement` is the single
+#: place it is worded for a human, the same rule §12 applies to the refund
+#: sentence.
+CLIENT_RETENTION_MONTHS = int(env("CLIENT_RETENTION_MONTHS", "24"))
 
 # Invariant 4 (CLAUDE.md §10): the USSD fallback line, as a constant rather than
 # a string in a view. It ships in `packages/tokens` for the client; this is the

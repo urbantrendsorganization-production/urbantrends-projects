@@ -116,6 +116,18 @@ CALL = re.compile(
 #: An interpolation, and the base constants that are not path segments.
 INTERPOLATION = re.compile(r"\$\{[^{}]*\}")
 
+#: `href={`/api/…`}` and `href="/api/…"`. Slice 14 added the first link in the
+#: product that points at the API rather than at a page: the client data export
+#: is a file with a `Content-Disposition`, so it is an anchor the browser
+#: follows rather than a `fetch` whose body somebody then has to be given a
+#: button to save.
+#:
+#: That made it a URL the frontend builds which none of the machinery above can
+#: see — a helper is a call site, an `href` is an attribute — and an unresolvable
+#: one would 404 at the moment somebody exercises a legal right. Only `/api/`
+#: hrefs are collected; a link to `/signin` is a page and is Next's business.
+HREF = re.compile(r"""href=\{?["'`](?P<path>/api/[^"'`]*)["'`]""")
+
 #: A template that is nothing *but* interpolations — `` `${ROOT}${path}` `` — is
 #: a wrapper's own body rather than an endpoint. Named once because two things
 #: need it: `full_url` skips it, and the bare-`fetch` check has to allow it.
@@ -175,7 +187,11 @@ SCOPED = {"shop"}
 
 def wrapper_bases():
     """`{helper: base}`, every base derived from the source that defines it."""
-    bases = {}
+    #: An `href` is already absolute — it is what the browser will request, with
+    #: nothing prepended. Not read from any source because there is no wrapper
+    #: to read it from, which is the one honest exception to this file's rule
+    #: about never writing a base down.
+    bases = {"href": ""}
     for file, helpers in WRAPPERS.items():
         source = (WEB / file).read_text()
         for helper in helpers:
@@ -202,7 +218,14 @@ def code(text):
 
 
 def call_sites():
-    """`(file, line, helper, raw path, that file's constants)` per request."""
+    """`(file, line, helper, raw path, that file's constants)` per request.
+
+    Anchors pointing at `/api/` are included, under the pseudo-helper `href`.
+    They carry a whole path already, so `wrapper_bases` gives them an empty
+    base and everything downstream treats them like any other request — which
+    is the point: a link to an endpoint is a request the moment somebody clicks
+    it.
+    """
     found = []
     for path in sources():
         source = code(path.read_text())
@@ -212,6 +235,9 @@ def call_sites():
             # `api\n  .get` and `api.get` are the same helper.
             helper = re.sub(r"\s+", "", match["helper"])
             found.append((path.relative_to(WEB), line, helper, match["path"], consts))
+        for match in HREF.finditer(source):
+            line = source[: match.start()].count("\n") + 1
+            found.append((path.relative_to(WEB), line, "href", match["path"], consts))
     return found
 
 

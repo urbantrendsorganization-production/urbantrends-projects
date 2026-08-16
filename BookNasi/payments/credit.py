@@ -74,6 +74,12 @@ class CreditState(models.TextChoices):
     SPENT = "spent", "Fully redeemed"
     EXPIRED = "expired", "Expired unused"
     CANCELLED = "cancelled", "Voided by the shop"
+    #: Slice 14. Distinct from `CANCELLED` because the shop did not decide this
+    #: and should not be answerable for it: the client asked to be erased, and
+    #: a credit is redeemed by pushing to a phone number we no longer hold.
+    #: Reported separately so a shop's books can show the liability going away
+    #: without it looking like they voided somebody's money.
+    VOIDED_ON_ERASURE = "erased", "Voided when the client was erased"
 
 
 #: How a credit came to exist. One value today; named rather than implied
@@ -102,6 +108,16 @@ class Credit(OrgDerivedModel):
     org_source = "shop"
 
     shop = models.ForeignKey("shops.Shop", on_delete=models.PROTECT, related_name="credits")
+    # Still `PROTECT` after slice 14, and the reason is worth writing down
+    # because it was nearly changed. Erasure is a *soft* delete: the client row
+    # survives with the person scrubbed out of it, so nothing is ever deleted
+    # and `PROTECT` never fires. It was never what stood between a client with
+    # an unspent balance and their right to be forgotten — the credit keeps
+    # pointing at the same row, which is what the shop's books need, and the
+    # balance stops being spendable via `VOIDED_ON_ERASURE` instead.
+    #
+    # What `PROTECT` still buys is the case it was written for: an admin or a
+    # shell hard-deleting a client out from under money that references them.
     client = models.ForeignKey("clients.Client", on_delete=models.PROTECT, related_name="credits")
 
     #: Whole shillings, like every other money column here.

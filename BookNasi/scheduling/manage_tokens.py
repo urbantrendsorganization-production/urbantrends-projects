@@ -65,6 +65,7 @@ Not the UUID primary key — that is unguessable but it is not the control.
 import secrets
 from datetime import timedelta
 
+from django.db import models
 from django.utils import timezone
 
 #: How long past its start a booking stays manageable. Not zero: a client
@@ -163,3 +164,24 @@ def resolve(token, *, now=None):
     if appointment.manage_expires_at is None or appointment.manage_expires_at <= now:
         raise ManageTokenInvalid
     return appointment
+
+
+def revoke_for_client(client):
+    """Kill every live manage link belonging to one person. Slice 14.
+
+    An erasure has to take the sessions with it. A manage token *is* the
+    session (CLAUDE.md §12 — "the link is the session"), so a link left live in
+    an old SMS is a working credential belonging to somebody who asked to be
+    forgotten. The page it opens would no longer carry their name, which makes
+    it worse rather than better: a credential nobody can attribute.
+
+    Bumps `token_version` the way `revoke` does rather than only nulling the
+    token, so anything already issued against the old version is dead too.
+    """
+    from scheduling.models import Appointment
+
+    return (
+        Appointment.objects.unscoped()
+        .filter(client=client)
+        .update(token_version=models.F("token_version") + 1, manage_token=None)
+    )
