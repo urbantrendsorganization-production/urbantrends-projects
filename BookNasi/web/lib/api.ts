@@ -133,10 +133,29 @@ export const shopScope =
   (path: string) =>
     `/api/v1/orgs/${orgId}/shops/${shopId}${path}`;
 
+/**
+ * `patch` and `delete` arrived with the setup screen, and only there.
+ *
+ * Nothing before it edited configuration: the booking flow creates, the staff
+ * app transitions a status through its own POST endpoints, and the dashboard
+ * only reads. Shop settings is the first screen that changes a row that
+ * already exists and removes one that should not — an opening-hours row for a
+ * day the shop no longer trades, a service link ticked by mistake.
+ *
+ * `del` rather than `delete` because `delete` is a reserved word; the method
+ * on the wire is the real one. Note what DELETE means on this API: shops,
+ * staff and services deactivate rather than disappear
+ * (`DeactivateInsteadOfDeleteMixin`), because appointments reference them and
+ * CLAUDE.md §9 requires history to survive. Only the pure-configuration rows —
+ * hours, leave, closures, staff-service links — are genuinely removed.
+ */
 export const api = {
   get: (path: string) => request(path),
   post: (path: string, payload: unknown) =>
     request(path, { method: "POST", body: JSON.stringify(payload) }),
+  patch: (path: string, payload: unknown) =>
+    request(path, { method: "PATCH", body: JSON.stringify(payload) }),
+  del: (path: string) => request(path, { method: "DELETE" }),
 };
 
 /** A stable id for one logical write, reused by every retry of it. */

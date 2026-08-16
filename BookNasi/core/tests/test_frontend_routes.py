@@ -61,7 +61,12 @@ WRAPPERS = {
     # `shopScope` is a wrapper too: it prepends the org-and-shop scope and
     # returns a function, so its call sites read `shop("/walk-in/")` with the
     # endpoint as a literal. That shape exists so this file can see it.
-    "lib/api.ts": ("api.get", "api.post", "shop", "postWithRetry"),
+    #
+    # `api.patch` and `api.del` arrived with the setup screen — the first one
+    # that edits a row rather than creating one. They are enumerated here for
+    # the same reason as the rest: a helper this file does not know about is a
+    # set of requests it silently skips.
+    "lib/api.ts": ("api.get", "api.post", "api.patch", "api.del", "shop", "postWithRetry"),
     "app/m/[token]/page.tsx": ("api",),
     "packages/booking-core/src/transport.ts": ("call",),
 }
@@ -87,7 +92,8 @@ PLACEHOLDERS = ["0f14d0ab-9605-4a62-a9e4-5ed26688389b", "a-shop-slug", "1"]
 #: written, and a regex that missed it would have silently covered nothing.
 #: `test_the_known_endpoints_are_among_them` is what caught that.
 CALL = re.compile(
-    r"(?P<helper>fetch|call|shop|postWithRetry|api\s*\.\s*get|api\s*\.\s*post|api)"
+    r"(?P<helper>fetch|call|shop|postWithRetry"
+    r"|api\s*\.\s*get|api\s*\.\s*post|api\s*\.\s*patch|api\s*\.\s*del|api)"
     r"\(\s*(?P<quote>[`\"'])(?P<path>[^`\"']*)(?P=quote)"
 )
 

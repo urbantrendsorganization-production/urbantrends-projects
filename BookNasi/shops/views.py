@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.tenancy import OrgScopedMixin
+from shops import readiness
 from shops.models import (
     Leave,
     OpeningHours,
@@ -313,3 +314,20 @@ class ShopOpenOnView(ShopScopedMixin, APIView):
                 {"detail": "date must be YYYY-MM-DD"}, status=status.HTTP_400_BAD_REQUEST
             )
         return Response({"date": day.isoformat(), "is_open": self.shop.is_open_on(day)})
+
+
+class ShopReadinessView(ShopScopedMixin, APIView):
+    """What is still missing before this shop can be booked online.
+
+    Managing roles only, matching every other write endpoint on this shop: the
+    answer is a description of the shop's configuration, and a stylist has no
+    reason to read one and no screen that asks for it.
+
+    The rule itself lives in `shops/readiness.py` — see that module for why it
+    is derived here rather than in the settings screen.
+    """
+
+    managing_roles_required = True
+
+    def get(self, request, org_id, shop_id):
+        return Response(readiness.report_for(self.shop))

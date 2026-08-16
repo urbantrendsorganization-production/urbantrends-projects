@@ -33,6 +33,8 @@ BookNasi takes an **M-Pesa deposit at booking time**. A no-show becomes partial 
 - Per-service deposit rules: flat, percentage, or none
 
 **Operations**
+- Shop setup: hours, services and deposits, chairs, rosters, per-staff durations, staff invites
+- A readiness checklist that says why the booking page is empty, derived server-side
 - Staff day view built for speed
 - Owner dashboard: today's bookings, no-show rate, revenue per staff, repeat client rate
 - SMS/WhatsApp confirmations and reminders
@@ -145,6 +147,8 @@ Never commit a filled `.env`. Sandbox credentials are still credentials.
 **The widget is a renderer, not a second app.** The booking flow's state machine lives in `web/packages/booking-core`, framework-free and enforced as such, so the embedded widget and the hosted page make the same decisions from the same code. The widget renders it in ~12 kB with no framework, inside a shadow root — which is what lets a host restyle it by named token while its stylesheet cannot reach the 52 px targets, the three-per-row slot grid, the hold countdown or the `*334#` line.
 
 **Cross-origin access is `/api/public/` only**, with credentials never allowed and the caller's origin never reflected. The org-scoped `/api/v1/` gets no CORS header at all; the same-origin policy is a control there.
+
+**"Is this shop bookable yet" is derived, not stored.** `shops/readiness.py` answers it from the same rule the availability engine composes from, because the surprising parts — a missing `StaffService` row meaning "does not offer this", a deposit-free service being unbookable online, a shift too short for anything the stylist does — are exactly what a second implementation in the settings screen would get wrong.
 
 See [`CLAUDE.md`](./CLAUDE.md) for the full engineering contract.
 

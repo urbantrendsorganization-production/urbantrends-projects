@@ -58,6 +58,13 @@ class ShopSerializer(serializers.ModelSerializer):
             "booking_horizon_days",
             "hold_ttl_minutes",
             "refund_window_hours",
+            # Both halves of the cancellation terms, not just the first.
+            # `refund_window_hours` shipped in slice 2 and this did not, so the
+            # settings screen could show an owner "…becomes credit for 60 days"
+            # while their own shop said 90 — the one sentence CLAUDE.md §12
+            # insists is worded in a single place, previewed from a number the
+            # owner could not see. The public serializer has always sent it.
+            "deposit_credit_days",
             "min_deposit_amount",
             "is_active",
             "created_at",
