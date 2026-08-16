@@ -176,6 +176,12 @@ class PublicHoldSerializer(serializers.Serializer):
     price_kes = serializers.IntegerField(source="price_snapshot", read_only=True)
     deposit_kes = serializers.IntegerField(source="deposit_snapshot", read_only=True)
     balance_kes = serializers.SerializerMethodField()
+    #: What has actually been credited to this booking — M-Pesa and spent shop
+    #: credit together. Distinct from `deposit_kes`, which after
+    #: `holds.apply_credit` is only what is still owed to M-Pesa and is zero for
+    #: a booking whose deposit shop credit covered outright. The paid screen led
+    #: with "KES 0 received" for exactly that case until slice 11.
+    paid_kes = serializers.SerializerMethodField()
     #: Slice 6. The countdown has to be able to say "still checking with M-Pesa"
     #: rather than "expired" — see `get_payment`.
     payment = serializers.SerializerMethodField()
@@ -273,7 +279,14 @@ class PublicHoldSerializer(serializers.Serializer):
         return appointment.service.name
 
     def get_balance_kes(self, appointment):
-        return max(appointment.price_snapshot - appointment.deposit_snapshot, 0)
+        from scheduling.lifecycle import balance_due_for
+
+        return balance_due_for(appointment)
+
+    def get_paid_kes(self, appointment):
+        from scheduling.lifecycle import paid_deposit_for
+
+        return paid_deposit_for(appointment)
 
 
 class PublicStaffSerializer(serializers.Serializer):
@@ -349,7 +362,9 @@ class ManageViewSerializer(serializers.Serializer):
         return str(appointment.service_id)
 
     def get_balance_kes(self, appointment):
-        return max(appointment.price_snapshot - appointment.deposit_snapshot, 0)
+        from scheduling.lifecycle import balance_due_for
+
+        return balance_due_for(appointment)
 
     def get_paid_kes(self, appointment):
         from scheduling.lifecycle import paid_deposit_for

@@ -28,7 +28,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Overview, type Report } from "../../components/owner/Overview";
-import { api } from "../../lib/api";
+import { ApiError, api } from "../../lib/api";
 
 type Membership = {
   organization: string;
@@ -79,7 +79,18 @@ export default function OwnerDashboard() {
         setMemberships(managing);
         if (managing.length === 1) setOrg(managing[0]);
       })
-      .catch(() => setError("Sign in to see your dashboard."));
+      // Not signed in is not an error to display — it is a destination. Both
+      // dashboards said "Sign in to see your dashboard" from the day they
+      // shipped, with nowhere to do it, because `/signin` did not exist until
+      // slice 11. A 401 or 403 here means the session is gone or was never
+      // there, and the honest response is the front door.
+      .catch((caught) => {
+        if (caught instanceof ApiError && (caught.status === 401 || caught.status === 403)) {
+          window.location.assign("/signin");
+          return;
+        }
+        setError("Could not reach the dashboard. Check your connection.");
+      });
   }, []);
 
   const load = useCallback(() => {
@@ -112,6 +123,40 @@ export default function OwnerDashboard() {
   if (!memberships) return <Shell>Loading…</Shell>;
   if (!memberships.length) {
     return <Shell>This dashboard is for shop owners and managers.</Shell>;
+  }
+
+  // An organization with no shops has nothing to report on, and every number
+  // below would be a zero that reads as a bad month rather than as an empty
+  // account. This is the "sent here by an empty dashboard" that slice 11 said
+  // onboarding should be reached by.
+  if (report && !shops.length) {
+    return (
+      <main style={{ maxWidth: 640, margin: "0 auto", padding: "var(--bn-space-11) var(--bn-space-gutter)" }}>
+        <h1 style={{ fontFamily: "var(--bn-font-display)", fontSize: "var(--bn-text-display-size)" }}>
+          Set up your shop
+        </h1>
+        <p style={{ color: "var(--bn-ink-70)", textWrap: "pretty" }}>
+          There is nothing to report yet. Add your hours, what you sell and who does it, and this
+          page fills in as bookings arrive.
+        </p>
+        <a
+          href="/setup"
+          style={{
+            minHeight: "var(--bn-target-cta)",
+            display: "inline-flex",
+            alignItems: "center",
+            padding: "0 var(--bn-space-8)",
+            borderRadius: "var(--bn-radius-md)",
+            background: "var(--bn-accent)",
+            color: "#fff",
+            fontWeight: 600,
+            textDecoration: "none",
+          }}
+        >
+          Start setup
+        </a>
+      </main>
+    );
   }
 
   return (
@@ -229,6 +274,23 @@ function TopBar({
           selected={String(days)}
           onSelect={(id) => onDays(Number(id))}
         />
+        {/* The way back to the settings that produced these numbers. Without
+            it, /setup exists and nothing in the product links to it. */}
+        <a
+          href="/setup"
+          style={{
+            minHeight: "var(--bn-target-control)",
+            display: "inline-flex",
+            alignItems: "center",
+            padding: "0 var(--bn-space-6)",
+            borderRadius: "var(--bn-radius-md)",
+            border: "1.5px solid var(--bn-border)",
+            color: "var(--bn-ink)",
+            textDecoration: "none",
+          }}
+        >
+          Settings
+        </a>
         {fetchedAt ? (
           <span style={{ color: "var(--bn-ink-45)", fontSize: "var(--bn-text-body-sm-size)" }}>
             as of{" "}

@@ -34,8 +34,35 @@ services:
       DJANGO_SETTINGS_MODULE: config.settings.local
       DATABASE_URL: postgres://booknasi:booknasi@postgres:5432/booknasi
       REDIS_URL: redis://redis:6379/0
-    volumes:
+    volumes: &app_volumes
       - .:/app
+      # Keeps the container's virtualenv OFF the host. Without this the bind
+      # mount above is two-way over `.venv` too, so `uv sync` inside the
+      # container writes its venv straight onto the developer's — root-owned,
+      # with `bin/python` pointing at `/usr/local/bin/python3`, which exists
+      # only in the image. The symptom is that `uv run` on the host stops
+      # working the moment anybody runs `docker compose up`, and the cause is
+      # nowhere near the symptom.
+      #
+      # Worse quietly: a host `pytest` already running has its site-packages
+      # swapped underneath it mid-run and goes on reporting results from a
+      # tree that no longer exists.
+      #
+      # An anonymous volume rather than `.dockerignore`, because the mount is
+      # what has to be masked and `.dockerignore` only affects build context.
+      #
+      # ORDER MATTERS ON A FRESH CLONE: run `uv sync` BEFORE the first
+      # `docker compose up`. Docker creates a missing mount point itself, as
+      # root — so starting the stack first leaves an empty root-owned `.venv`
+      # on the host, and host `uv sync` then fails with a permission denied on
+      # a directory the developer appears to own the parent of. The contents no
+      # longer leak either way once this volume exists; it is only the empty
+      # mount point that has to be there first, and `uv sync` is what puts it
+      # there with the right owner. To recover from having done it in the wrong
+      # order, without sudo:
+      #
+      #   docker run --rm -v "$PWD":/mnt alpine chown $(id -u):$(id -g) /mnt/.venv
+      - /app/.venv
     ports:
       # Bound to loopback; Caddy is what faces the internet in production.
       - "127.0.0.1:8000:8000"
@@ -47,8 +74,7 @@ services:
     build: .
     command: uv run celery -A config worker -l info
     environment: *django_env
-    volumes:
-      - .:/app
+    volumes: *app_volumes
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -57,8 +83,7 @@ services:
     build: .
     command: uv run celery -A config beat -l info
     environment: *django_env
-    volumes:
-      - .:/app
+    volumes: *app_volumes
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}

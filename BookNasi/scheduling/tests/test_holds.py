@@ -650,6 +650,16 @@ class TestTheHoldEndpoints:
             "price_kes",
             "deposit_kes",
             "balance_kes",
+            # Slice 11. What this booking has actually been credited — M-Pesa
+            # and spent shop credit together — because `deposit_kes` is only
+            # what is still owed to M-Pesa and reads zero when credit covered
+            # the deposit outright, which made the paid screen say "KES 0
+            # received". Safe to add to this allowlist on the same grounds as
+            # the figures above it: it is money this caller has just handed
+            # over against a service whose price is printed on the shop's
+            # public page, and it says nothing about who they are. It is not a
+            # credit *balance* — that stays on the token-gated manage view.
+            "paid_kes",
             # slice 6. `payment` is the payment's own state plus the support
             # code — nothing about the client that the caller did not send.
             # `shop_phone` is already on the shop's public page header.

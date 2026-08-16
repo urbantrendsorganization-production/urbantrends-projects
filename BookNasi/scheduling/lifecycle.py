@@ -158,6 +158,56 @@ def paid_deposit_for(appointment):
     return paid + redeemed
 
 
+def balance_due_for(appointment):
+    """What the client still owes at the chair, in whole shillings.
+
+    The counterpart to `paid_deposit_for`, and the reason it exists is that
+    three screens each wrote `price_snapshot - deposit_snapshot` instead, which
+    is a different and usually-wrong number.
+
+    `deposit_snapshot` is not "the deposit this booking carries". After
+    `holds.apply_credit` it is **what is still owed to M-Pesa** — the figure the
+    STK push needs — so a deposit covered entirely by shop credit leaves it at
+    zero. Subtracting it from the price therefore billed the client for the
+    whole service after they had already paid part of it with their own credit.
+
+    Slice 11's walk found all three copies disagreeing at once: the confirm
+    screen said the balance was KES 900, the booked screen and the confirmation
+    SMS both said KES 1,200, and the manage page printed "Total 1,200 · Deposit
+    paid 300 · Balance 1,200" on a single card, because its `paid` line already
+    read `paid_deposit_for` and its balance line did not. The client is told
+    they owe money they have already handed over, in the one message they keep.
+
+    So: price minus what has actually been credited to the booking, from the one
+    function that knows about both payments and redeemed credit. Never
+    negative — an overpaid booking owes nothing, it does not owe a negative.
+
+    ## The one branch, and why it is not a fudge
+
+    While a booking is still `PENDING_PAYMENT` the deposit is in flight — the
+    prompt is on the client's phone and nothing has landed. Reporting the whole
+    price at that moment would be literally true and useless: the client is
+    looking at a slot they are in the middle of paying for, and the number they
+    need is what they will owe at the chair once it lands. `deposit_snapshot` is
+    exactly that in-flight figure, so it is added back for that state and only
+    that state. `scheduling/tests/test_holds.py` has asserted this projection
+    since slice 5 and it is the shape a third party integrates against
+    (CLAUDE.md §1); breaking it to fix a different bug would be a contract
+    change smuggled in as a repair.
+
+    Adding both terms is safe precisely because they are disjoint here:
+    `paid_deposit_for` counts money that has arrived and `deposit_snapshot`
+    counts what is still owed to M-Pesa, and a payment that has arrived while
+    the booking is still pending is a state the callback closes within seconds.
+    Once it does — or once credit confirmed the booking outright — the branch
+    stops applying and the figure is the honest one.
+    """
+    paid = paid_deposit_for(appointment)
+    if appointment.status == S.PENDING_PAYMENT:
+        paid += appointment.deposit_snapshot
+    return max(appointment.price_snapshot - paid, 0)
+
+
 def is_forfeited(appointment):
     """The forfeit, still derived. No state, per the slice 6 machine.
 
@@ -199,6 +249,7 @@ def cancel(appointment, *, now=None, shop_cancelled=False):
     apply_transition(appointment, S.CANCELLED, now=now)
 
     issued = None
+    restored = []
     if outcome == Outcome.REFUND and amount > 0:
         # Recorded, not sent. The money is in the shop's paybill and only they
         # can move it, so this puts the row on the exception queue with a
@@ -206,32 +257,56 @@ def cancel(appointment, *, now=None, shop_cancelled=False):
         Payment.objects.unscoped().filter(
             appointment=appointment, state=PaymentState.SUCCEEDED, refund_due_at__isnull=True
         ).update(refund_due_at=now)
+        # The other half of the same refund, and the half that used to vanish.
+        # A deposit paid with shop credit has no `Payment` row for the filter
+        # above to match, so the stamp fell on nothing: the client was promised
+        # a refund, the exception queue stayed empty and the credit stayed
+        # spent. Money returns in the form it arrived, keeping the original
+        # expiry — see `payments.credit.restore` for why not cash and why not a
+        # fresh window. A mixed deposit does both, once each.
+        restored = credit_module.restore(appointment=appointment, now=now)
     if outcome == Outcome.CREDIT and amount > 0:
-        payment = (
-            Payment.objects.unscoped()
-            .filter(appointment=appointment, state=PaymentState.SUCCEEDED)
-            .order_by("created_at")
-            .first()
-        )
-        issued = credit_module.issue(
-            appointment=appointment, payment=payment, amount_kes=amount, now=now
-        )
+        # The credit-funded half goes back exactly as it came, with its own
+        # expiry — the same rule as the REFUND branch above and for the same
+        # reason. Issuing the whole deposit as one fresh credit is what this
+        # branch used to do, and it made booking-and-cancelling an unbounded
+        # extension: spend a credit, cancel late, and the money returns with a
+        # brand-new `deposit_credit_days` on it, every time, forever. §12 gives
+        # a *cash* deposit a fresh window when it becomes credit; it never said
+        # a window could be renewed by spending it.
+        restored = credit_module.restore(appointment=appointment, now=now)
+        cash = amount - sum(row.amount_kes for row in restored)
+        if cash > 0:
+            payment = (
+                Payment.objects.unscoped()
+                .filter(appointment=appointment, state=PaymentState.SUCCEEDED)
+                .order_by("created_at")
+                .first()
+            )
+            issued = credit_module.issue(
+                appointment=appointment, payment=payment, amount_kes=cash, now=now
+            )
 
     # Every outstanding link dies with the booking. See `manage_tokens.revoke`.
     from scheduling import manage_tokens
 
     manage_tokens.revoke(appointment)
 
-    _tell_them(appointment, outcome, amount, issued)
+    _tell_them(appointment, outcome, amount, issued, restored)
     return outcome, amount, issued
 
 
-def _tell_them(appointment, outcome, amount, issued):
+def _tell_them(appointment, outcome, amount, issued, restored=()):
     """One SMS, after commit, saying which of the four outcomes happened.
 
     A cancellation confirmation that does not name the money is the support
     ticket §12 was trying to prevent — the client knows they cancelled; what
     they do not know is whether they lost KES 875.
+
+    `restored` matters to the wording rather than to the outcome: a refund that
+    comes back as credit is still a REFUND under §12, but "the shop will refund
+    you" would be a false statement about where the money went, and the client
+    would wait for a transfer that is never coming.
     """
     from notifications.service import queue_message
     from notifications.templates import Template
@@ -243,7 +318,20 @@ def _tell_them(appointment, outcome, amount, issued):
         Outcome.CREDIT: Template.CANCELLED_CREDIT,
         Outcome.NOTHING: Template.CANCELLED_PLAIN,
     }[outcome]
-    queue_message(appointment, template, credit=issued)
+    # The figure §12 just decided, named explicitly. Without it `paid` fell
+    # through `variables_for`'s `setdefault` to "0" and every refund SMS ever
+    # sent read "Your KES 0 deposit will be refunded by the shop" — the credit
+    # template was right only because it takes its figure from the credit it
+    # was handed, and the refund branch is handed neither a payment nor a
+    # credit. Slice 11 found it by looking at a message body rather than at a
+    # status code.
+    queue_message(
+        appointment,
+        template,
+        credit=issued,
+        restored=restored,
+        variables_extra={"paid": f"{amount:,}"},
+    )
 
 
 @transaction.atomic

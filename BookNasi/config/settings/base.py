@@ -230,6 +230,31 @@ STAFF_INVITE_TTL_DAYS = 14
 # Where the client-facing pages live. Used to build the one link an SMS carries.
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", "http://localhost:3000")
 
+# The origin the frontend is served from is an origin we accept writes from.
+#
+# Django compares the browser's `Origin` header against the request's host for
+# every unsafe method, and rejects a mismatch unless the origin is listed here.
+# Behind the dev proxy and behind Caddy the browser's origin is
+# `PUBLIC_BASE_URL` while the host Django sees is the container it is bound to,
+# so they never match on their own and every authenticated write 403s.
+#
+# Defaulted from `PUBLIC_BASE_URL` rather than left empty, because those two
+# being the same thing is not a coincidence: it is the address we put in every
+# SMS and the address the staff app is loaded from. A deployment that overrides
+# one and forgets the other is the failure this default removes.
+#
+# Set the env var to widen it — several shop subdomains, or a wildcard like
+# `https://*.booknasi.co.ke`. Listing an origin here is not a CORS grant and
+# gives nobody cross-origin *read* access; `core/cors.py` still answers
+# `/api/v1/` with no CORS headers at all.
+#
+# This was empty in every environment but production until slice 11's manual
+# walk, where it turned out the staff app could not record a walk-in: the
+# suites drive the API directly and a test client sends no `Origin` header, so
+# nothing in 1305 tests crossed the one seam where this matters. See
+# `core/tests/test_csrf_origin.py`.
+CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", default=(PUBLIC_BASE_URL,))
+
 # --------------------------------------------------------------- slice 6
 
 # Safaricom Daraja. Nothing real here and nothing real in `.env.example` —

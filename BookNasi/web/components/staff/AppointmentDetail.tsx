@@ -35,14 +35,14 @@ const UNDO_LABEL: Record<string, string> = {
 };
 
 export function AppointmentDetail({
-  base,
+  shop,
   appointment,
   now,
   onClose,
   onTransition,
   onSaved,
 }: {
-  base: string;
+  shop: (path: string) => string;
   appointment: Appointment;
   now: Date;
   onClose: () => void;
@@ -57,7 +57,7 @@ export function AppointmentDetail({
   async function saveClient() {
     setSaving(true);
     try {
-      const updated = await api.post(`${base}/appointments/${appointment.id}/client/`, {
+      const updated = await api.post(shop(`/appointments/${appointment.id}/client/`), {
         full_name: fullName,
         phone,
       });

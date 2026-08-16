@@ -21,6 +21,11 @@ urlpatterns = [
         views.ShopOpenOnView.as_view(),
         name="shop-open-on",
     ),
+    path(
+        "orgs/<uuid:org_id>/shops/<uuid:shop_id>/readiness/",
+        views.ShopReadinessView.as_view(),
+        name="shop-readiness",
+    ),
     # Shop children
     path(
         "orgs/<uuid:org_id>/shops/<uuid:shop_id>/opening-hours/",

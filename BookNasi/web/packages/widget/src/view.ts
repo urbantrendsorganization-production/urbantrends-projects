@@ -473,8 +473,12 @@ function paid(state: BookingState): Child {
       h("p", { class: "bn-mono bn-big", style: "margin-top:4px" }, [
         payment?.mpesa_receipt || payment?.support_code || "",
       ]),
+      // `paid_kes` is M-Pesa and spent shop credit together; `deposit_kes` is
+      // only what is still owed to M-Pesa and is zero when credit covered the
+      // deposit outright — which is the one path where `payment` is null, so
+      // the old fallback led with "KES 0 received" for it.
       h("p", { style: "margin-top:10px" }, [
-        money(payment?.amount_kes ?? hold.deposit_kes),
+        money(hold.paid_kes ?? payment?.amount_kes ?? hold.deposit_kes),
         " received.",
       ]),
     ]),

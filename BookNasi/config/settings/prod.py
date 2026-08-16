@@ -74,4 +74,8 @@ SECURE_HSTS_SECONDS = 31536000
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
-CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS")
+# `CSRF_TRUSTED_ORIGINS` is set in `base.py`, defaulted from `PUBLIC_BASE_URL`
+# and still overridable by the same env var. It used to be re-read here with an
+# empty default, which meant production silently rejected every authenticated
+# write whenever the variable was unset — the same defect slice 11 found in
+# development, hidden behind a line that looked like it was handling it.

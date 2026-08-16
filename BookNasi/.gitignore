@@ -12,5 +12,10 @@ __pycache__/
 node_modules/
 .next/
 
+# Celery Beat's own state, written into the working tree because the container
+# bind-mounts it. A binary file that appears the first time the stack is run
+# and would otherwise sit in `git status` inviting somebody to commit it.
+celerybeat-schedule
+
 # web/packages/tokens/dist is generated but committed on purpose: CI checks it
 # against tokens.json, and consumers get the CSS without a build step.

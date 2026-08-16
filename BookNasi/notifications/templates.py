@@ -136,11 +136,44 @@ def _slot_lost(v):
 
 
 def _cancelled_refund(v):
+    """§12's refundable cancellation, in whichever form the money took.
+
+    Slice 11: a deposit paid with shop credit comes back as credit, keeping the
+    original expiry — `payments.credit.restore`. Saying "the shop will refund
+    you" for that leaves the client waiting for a transfer nobody is going to
+    send, so the sentence follows the money instead of assuming it was cash.
+
+    The cash clause is kept for the mixed case rather than the two being
+    exclusive, because a deposit split between credit and M-Pesa returns as
+    both and a message naming only one half is the half the client chases.
+    """
+    head = f"Cancelled: {v['when']} with {v['staff']} at {v['shop']}."
+    restored = v.get("restored")
+    if not restored:
+        return f"{head} Your KES {v['paid']} deposit will be refunded by the shop. " + (
+            f"Any questions, {v['shop_phone']}."
+        )
+
+    quote = f" Quote {v['restored_reference']}." if v.get("restored_reference") else ""
+    cash = _refund_cash_clause(v, restored)
     return (
-        f"Cancelled: {v['when']} with {v['staff']} at {v['shop']}. "
-        f"Your KES {v['paid']} deposit will be refunded by the shop. "
-        f"Any questions, {v['shop_phone']}."
+        f"{head}{cash} KES {restored} is back as credit at {v['shop']}, "
+        f"valid until {v['restored_expires']} on any service.{quote} {v['link']}"
     )
+
+
+def _refund_cash_clause(v, restored):
+    """The M-Pesa half of a mixed refund, or nothing at all.
+
+    Derived by subtraction rather than passed in: `paid` is already the whole
+    deposit and `restored` the part that was credit, so anything left is what
+    the shop owes in cash. Written as a clause so the common case — a deposit
+    that was entirely credit — reads as one clean sentence with no dangling
+    "and KES 0".
+    """
+    paid = int(str(v.get("paid", "0")).replace(",", "") or 0)
+    cash = paid - int(str(restored).replace(",", "") or 0)
+    return f" KES {cash:,} will be refunded by the shop and" if cash > 0 else ""
 
 
 def _cancelled_credit(v):
@@ -148,10 +181,17 @@ def _cancelled_credit(v):
     # record the client gets of money they still have. A message that said
     # "your deposit has become credit" without saying how much, until when, or
     # what to quote is the support call §12 was trying to prevent.
+    #
+    # The quote clause is conditional because a deposit part-paid with credit
+    # comes back as two credits on two dates — the cash half on a fresh window,
+    # the credit half on the one it already had. Naming one of two references
+    # would send the client to the shop quoting the wrong half, so in that case
+    # the date named is the sooner of the two and the link carries the detail.
+    quote = f" Quote {v['credit_reference']}." if v.get("credit_reference") else ""
     return (
         f"Cancelled: {v['when']} with {v['staff']} at {v['shop']}. "
         f"Your KES {v['paid']} deposit is now credit at {v['shop']}, valid until "
-        f"{v['credit_expires']} on any service. Quote {v['credit_reference']}. "
+        f"{v['credit_expires']} on any service.{quote} "
         f"{v['link']}"
     )
 
