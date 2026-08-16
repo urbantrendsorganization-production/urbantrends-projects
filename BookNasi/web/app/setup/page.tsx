@@ -48,6 +48,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Checklist, type Readiness } from "../../components/setup/Checklist";
 import { HoursEditor, type Closure, type Hours } from "../../components/setup/HoursEditor";
 import { MpesaEditor, type Mpesa } from "../../components/setup/MpesaEditor";
+import { PrivacyEditor, type ClientRow } from "../../components/setup/PrivacyEditor";
 import { ServicesEditor, type Service } from "../../components/setup/ServicesEditor";
 import { ShopForm, type Shop } from "../../components/setup/ShopForm";
 import {
@@ -69,6 +70,11 @@ const SECTIONS = [
   { id: "hours", label: "Hours" },
   { id: "services", label: "Services" },
   { id: "staff", label: "Staff" },
+  // Slice 14. Managing roles, not owner-only: a manager can see requests and
+  // export, and gets a sentence where the Remove button would be. The person
+  // most likely to field the phone call should not be the one who cannot see
+  // that a request exists.
+  { id: "privacy", label: "Data & privacy" },
 ];
 
 //: Appended for an owner only. Kept out of `SECTIONS` rather than filtered out
@@ -92,6 +98,8 @@ export default function Setup() {
   const [openStaffId, setOpenStaffId] = useState<string | null>(null);
   const [readiness, setReadiness] = useState<Readiness | null>(null);
   const [mpesa, setMpesa] = useState<Mpesa | null>(null);
+  const [clients, setClients] = useState<ClientRow[]>([]);
+  const [retention, setRetention] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -181,6 +189,26 @@ export default function Setup() {
   }, [org, shopId]);
 
   useEffect(loadMpesa, [loadMpesa]);
+
+  // Org-scoped, not shop-scoped — CLAUDE.md §3 and §9 agree here: the
+  // organization is the controller, and a data subject's record spans every
+  // branch they have visited. So this hangs off `org` and not `shopId`, and
+  // does not reload when the shop selector changes.
+  const loadPrivacy = useCallback(() => {
+    if (!org) return;
+    const orgId = org.organization;
+    Promise.all([
+      api.get(`/api/v1/orgs/${orgId}/clients/`),
+      api.get(`/api/v1/orgs/${orgId}/clients/retention/`),
+    ])
+      .then(([clientData, policy]) => {
+        setClients(rows(clientData));
+        setRetention(policy.statement);
+      })
+      .catch(() => setRetention(""));
+  }, [org]);
+
+  useEffect(loadPrivacy, [loadPrivacy]);
 
   // One staff member's days and services, fetched when their row is opened.
   // Kept out of the batch above because a twelve-chair shop would otherwise
@@ -383,6 +411,16 @@ export default function Setup() {
               openStaffId={openStaffId}
               onOpenStaff={setOpenStaffId}
               onChanged={refresh}
+            />
+          ) : null}
+
+          {section === "privacy" ? (
+            <PrivacyEditor
+              orgId={orgId}
+              clients={clients}
+              retentionStatement={retention}
+              canErase={org?.role === "owner"}
+              onChanged={loadPrivacy}
             />
           ) : null}
 

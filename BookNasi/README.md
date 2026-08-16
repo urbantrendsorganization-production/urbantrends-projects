@@ -36,6 +36,7 @@ BookNasi takes an **M-Pesa deposit at booking time**. A no-show becomes partial 
 **Operations**
 - Shop setup: hours, services and deposits, chairs, rosters, per-staff durations, staff invites
 - A readiness checklist that says why the booking page is empty, derived server-side
+- Data protection: client export, erasure, and a 24-month retention sweep
 - Staff day view built for speed
 - Owner dashboard: today's bookings, no-show rate, revenue per staff, repeat client rate
 - SMS/WhatsApp confirmations and reminders
@@ -128,6 +129,7 @@ Concurrency tests around availability and payment callbacks are part of the suit
 | `MPESA_CONSUMER_KEY` / `MPESA_CONSUMER_SECRET` | Daraja app credentials |
 | `MPESA_SHORTCODE` / `MPESA_PASSKEY` | The **platform** till/paybill and STK passkey |
 | `MPESA_CREDENTIAL_KEYS` | `id:key` pairs that encrypt each shop's own credentials |
+| `CLIENT_RETENTION_MONTHS` | How long client data is kept after the last visit (default 24) |
 | `MPESA_CALLBACK_URL` | Public HTTPS callback endpoint |
 | `SMS_API_KEY` / `SMS_SENDER_ID` | Messaging provider |
 | `ALLOWED_HOSTS` | Comma-separated |
@@ -170,7 +172,15 @@ Clinics are deferred deliberately — appointment records tied to a medical prac
 
 ## Data protection
 
-Client names, phone numbers and visit history are personal data under the Kenya Data Protection Act, 2019. BookNasi acts as a controller for its own users and a processor for its shops' clients. The deployment ships with a privacy policy, a stated retention period, export and delete paths, and a processor clause in the shop terms.
+Client names, phone numbers and visit history are personal data under the Kenya Data Protection Act, 2019. BookNasi acts as a controller for its own users and a processor for its shops' clients.
+
+- **Retention** — 24 months after a client's last appointment (`CLIENT_RETENTION_MONTHS`), enforced by a daily sweep, not merely stated.
+- **Export** — every shop owner can hand a client a JSON file of everything held about them.
+- **Erasure** — a soft delete with a PII scrub, never a cascade. Name, phone, notes and the payer's number on the payment rows are removed, and every manage link is revoked. The bookings stay, still pointing at the now-anonymous row, so the shop's revenue, no-show rate and repeat-client figures do not move when somebody exercises their rights.
+- **The client can ask** through the link in their booking SMS. That records a request with a timestamp — the statutory clock starts when they ask — and the owner acts on it.
+- The retention sentence is worded in exactly one place (`clients/erasure.retention_statement`) and read from there by every screen that shows it.
+
+**Not built yet:** there is no public privacy-policy page and no processor clause in the shop terms. The machinery §9 asks for exists and is enforced; the documents that have to state it to a client and to a shop do not. An earlier version of this section claimed otherwise.
 
 ---
 

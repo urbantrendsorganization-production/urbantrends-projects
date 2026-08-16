@@ -53,6 +53,13 @@ urlpatterns = [
         lifecycle_views.ManageCancelView.as_view(),
         name="manage-cancel",
     ),
+    # CLAUDE.md §9's delete path, from the client's side. Records a request
+    # rather than erasing — see the view.
+    path(
+        "manage/<str:token>/forget-me/",
+        lifecycle_views.ManageForgetMeView.as_view(),
+        name="manage-forget-me",
+    ),
     path(
         "manage/<str:token>/reschedule/",
         lifecycle_views.ManageRescheduleView.as_view(),
