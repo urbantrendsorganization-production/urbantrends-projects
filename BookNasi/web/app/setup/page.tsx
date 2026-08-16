@@ -29,17 +29,25 @@
  * still missing. This is a settings page on a laptop, not the booking flow on
  * 3G; §12's cost argument does not apply.
  *
- * ## Owners and managers only
+ * ## Owners and managers only, and one tab that is narrower still
  *
  * `managing_roles_required` on every endpoint underneath, so this is a
  * courtesy rather than the control. A stylist who arrives here is sent to
  * their own day.
+ *
+ * **M-Pesa is owner-only.** It is the one endpoint in the product a manager
+ * cannot reach — a manager sets prices and deposit rules, so they decide how
+ * much is taken, but where it lands is a different act. The tab is hidden
+ * rather than shown-and-refused, and the request is deliberately outside the
+ * batch below: a 403 inside a `Promise.all` fails the whole load, so a
+ * manager would lose hours, services and staff to a tab they cannot use.
  */
 
 import { useCallback, useEffect, useState } from "react";
 
 import { Checklist, type Readiness } from "../../components/setup/Checklist";
 import { HoursEditor, type Closure, type Hours } from "../../components/setup/HoursEditor";
+import { MpesaEditor, type Mpesa } from "../../components/setup/MpesaEditor";
 import { ServicesEditor, type Service } from "../../components/setup/ServicesEditor";
 import { ShopForm, type Shop } from "../../components/setup/ShopForm";
 import {
@@ -63,6 +71,11 @@ const SECTIONS = [
   { id: "staff", label: "Staff" },
 ];
 
+//: Appended for an owner only. Kept out of `SECTIONS` rather than filtered out
+//: of it at render time so that no code path can produce the tab for somebody
+//: whose request for it would 403.
+const OWNER_SECTIONS = [{ id: "mpesa", label: "M-Pesa" }];
+
 export default function Setup() {
   const [org, setOrg] = useState<Membership | null>(null);
   const [memberships, setMemberships] = useState<Membership[] | null>(null);
@@ -78,6 +91,7 @@ export default function Setup() {
   const [details, setDetails] = useState<Record<string, StaffDetail>>({});
   const [openStaffId, setOpenStaffId] = useState<string | null>(null);
   const [readiness, setReadiness] = useState<Readiness | null>(null);
+  const [mpesa, setMpesa] = useState<Mpesa | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -150,6 +164,23 @@ export default function Setup() {
   }, [org, shopId]);
 
   useEffect(loadShop, [loadShop]);
+
+  // Owner only, and outside the batch above on purpose. A 403 inside a
+  // `Promise.all` rejects the whole thing, so folding this in would cost a
+  // manager their hours, services and staff to a tab they cannot open.
+  const loadMpesa = useCallback(() => {
+    if (!org || !shopId || org.role !== "owner") {
+      setMpesa(null);
+      return;
+    }
+    const orgId = org.organization;
+    api
+      .get(`/api/v1/orgs/${orgId}/shops/${shopId}/mpesa/`)
+      .then(setMpesa)
+      .catch(() => setMpesa(null));
+  }, [org, shopId]);
+
+  useEffect(loadMpesa, [loadMpesa]);
 
   // One staff member's days and services, fetched when their row is opened.
   // Kept out of the batch above because a twelve-chair shop would otherwise
@@ -265,7 +296,15 @@ export default function Setup() {
             </select>
           ) : null}
 
-          {readiness ? <Checklist readiness={readiness} onGo={setSection} /> : null}
+          {readiness ? (
+            <Checklist
+              readiness={readiness}
+              onGo={setSection}
+              reachable={[...SECTIONS, ...(org?.role === "owner" ? OWNER_SECTIONS : [])].map(
+                (tab) => tab.id
+              )}
+            />
+          ) : null}
 
           <nav
             style={{
@@ -275,7 +314,7 @@ export default function Setup() {
               borderBottom: "1px solid var(--bn-line)",
             }}
           >
-            {SECTIONS.map((tab) => (
+            {[...SECTIONS, ...(org?.role === "owner" ? OWNER_SECTIONS : [])].map((tab) => (
               <button
                 key={tab.id}
                 type="button"
@@ -344,6 +383,22 @@ export default function Setup() {
               openStaffId={openStaffId}
               onOpenStaff={setOpenStaffId}
               onChanged={refresh}
+            />
+          ) : null}
+
+          {shop && section === "mpesa" && mpesa ? (
+            <MpesaEditor
+              orgId={orgId}
+              shopId={shop.id}
+              mpesa={mpesa}
+              onChanged={() => {
+                loadMpesa();
+                // The readiness checklist reads `can_take_deposits`, so a
+                // connection saved here changes the list at the top of the same
+                // screen. Without this the owner connects M-Pesa and the
+                // checklist goes on telling them to.
+                loadShop();
+              }}
             />
           ) : null}
         </>

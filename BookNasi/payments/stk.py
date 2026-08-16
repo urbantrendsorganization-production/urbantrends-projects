@@ -39,11 +39,11 @@ from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
+from payments import tills
 from payments.daraja import (
     DarajaMisconfigured,
     DarajaRejected,
     DarajaUnavailable,
-    get_client,
 )
 from payments.machine import apply_payment_transition, awaiting_result_for, open_payment_for
 from payments.models import OPEN_PAYMENT_CONSTRAINT, Payment
@@ -127,7 +127,22 @@ def _payer(appointment):
 
 
 def _send(payment, appointment, *, now):
-    client = get_client()
+    # The shop, not the process. Before slice 13 every push on a deployment went
+    # to one shortcode read from the environment; a salon's deposits now reach
+    # the salon (CLAUDE.md §1). `client_for` raises `ShopCannotCollect`, which is
+    # a `DarajaMisconfigured` and so is caught below with the rest of "our
+    # configuration is wrong, nothing moved, do not retry on a schedule".
+    try:
+        client = tills.client_for(appointment.shop)
+    except DarajaMisconfigured as exc:
+        logger.error("no m-pesa account for %s: %s", payment.support_code, exc)
+        return apply_payment_transition(
+            payment,
+            PaymentState.PUSH_FAILED,
+            now=now,
+            result_desc=str(exc)[:255],
+        )
+
     try:
         accepted = client.push(
             amount=payment.amount,

@@ -9,6 +9,12 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "celery>=5.4",
     "redis>=5.0",
+    # The sixth, and the only one added against CLAUDE.md §11's default. Slice
+    # 13 puts each shop's own M-Pesa passkey and consumer secret in the
+    # database, and neither Django nor the stdlib does authenticated symmetric
+    # encryption — `hashlib` and `hmac` verify, they do not conceal. See
+    # `core/secrets.py` for why storing them in the clear was not an option.
+    "cryptography>=43",
 ]
 
 [dependency-groups]

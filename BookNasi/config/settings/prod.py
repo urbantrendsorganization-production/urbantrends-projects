@@ -1,3 +1,5 @@
+from cryptography.fernet import Fernet
+
 from config.env import MissingSetting, env, env_list
 
 from .base import *  # noqa: F403
@@ -64,9 +66,52 @@ if MPESA["TRANSACTION_TYPE"] not in (MPESA_PAYBILL, MPESA_TILL):  # noqa: F405
 # The credentials themselves. `base.py` defaults each to "" so local work needs
 # no M-Pesa account at all; production without them is a shop that cannot take
 # a deposit, which is the product.
+#
+# Still required after slice 13, even though a shop may now carry its own. These
+# are the *platform* till, which `Shop.CollectsVia.PLATFORM` selects and which
+# every shop predating that migration is on. A deployment where every shop has
+# connected its own would not strictly need them — but there is no such
+# deployment today, and the switch that would let one say so is config surface
+# bought for a situation nobody is in. Revisit when one exists.
 for _key in ("CONSUMER_KEY", "CONSUMER_SECRET", "SHORTCODE", "PASSKEY", "CALLBACK_URL"):
     if not MPESA[_key]:  # noqa: F405
         raise MissingSetting(f"MPESA_{_key} must be set in the environment")
+
+# A shop's own credentials live in a column and are encrypted there. Without a
+# key, `core.secrets.seal` refuses — which is the right failure, but it would
+# arrive when an owner presses Save on the onboarding screen rather than when
+# the deployment went out. Parsed rather than merely checked for presence: an
+# unset variable and a truncated key fail at exactly the same moment otherwise,
+# and only one of them is obvious from the outside.
+MPESA_CREDENTIAL_KEYS = env_list("MPESA_CREDENTIAL_KEYS")
+if not MPESA_CREDENTIAL_KEYS:
+    raise MissingSetting(
+        "MPESA_CREDENTIAL_KEYS must be set — a shop's own M-Pesa passkey cannot be "
+        "stored without it. Generate one with: python -c "
+        "'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())' "
+        "and set MPESA_CREDENTIAL_KEYS=2026a:<that key>"
+    )
+
+_seen = set()
+for _entry in MPESA_CREDENTIAL_KEYS:
+    _id, _, _material = _entry.partition(":")
+    _id = _id.strip()
+    if _id in _seen:
+        # Two keys under one id makes `Shop.mpesa_key_id` ambiguous, and the
+        # re-encryption pass that reads it would then be unable to tell which
+        # rows it had already done.
+        raise MissingSetting(f"MPESA_CREDENTIAL_KEYS has more than one entry with id {_id!r}")
+    _seen.add(_id)
+    try:
+        Fernet(_material.strip())
+    except Exception as _exc:  # noqa: BLE001 — any parse failure is the same answer
+        # Never `_material`, and never `_exc`'s text: `cryptography` echoes the
+        # offending value into some of its messages, and this one lands in a
+        # deploy log.
+        raise MissingSetting(
+            f"MPESA_CREDENTIAL_KEYS entry {_id!r} is not a valid Fernet key "
+            "(32 url-safe base64-encoded bytes)"
+        ) from None
 
 # Caddy terminates TLS and proxies to a container bound to 127.0.0.1.
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")

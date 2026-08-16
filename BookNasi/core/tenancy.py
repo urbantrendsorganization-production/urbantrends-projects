@@ -32,6 +32,13 @@ class OrgScopedMixin:
     """Resolves `self.organization` from the `org_id` URL kwarg."""
 
     managing_roles_required = False
+    #: Stricter than `managing_roles_required`, and used by exactly one endpoint
+    #: (slice 13's M-Pesa connection). A manager already sets prices and deposit
+    #: rules, so they decide how much money is taken; where it *lands* is a
+    #: different act. An owner who wants to delegate it can, by making somebody
+    #: an owner — which is a visible change, unlike a manager quietly repointing
+    #: a shop's takings at an account nobody else can see the number of.
+    owner_role_required = False
 
     @property
     def organization(self):
@@ -54,6 +61,8 @@ class OrgScopedMixin:
         # Touching `self.organization` here means the 404 happens before any
         # handler body runs, so a handler can never see an unresolved org.
         organization = self.organization
+        if self.owner_role_required and self.membership.role != Role.OWNER:
+            raise PermissionDenied("Only the owner can do this.")
         if self.managing_roles_required and self.membership.role not in MANAGING_ROLES:
             raise PermissionDenied("Only an owner or manager can do this.")
         return organization

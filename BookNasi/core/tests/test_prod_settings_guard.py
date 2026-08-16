@@ -41,6 +41,10 @@ REQUIRED = {
     "MPESA_CALLBACK_URL": "https://booknasi.co.ke/api/mpesa/tok/",
     "MPESA_TRANSACTION_TYPE": "CustomerPayBillOnline",
     "MPESA_TILL_NUMBER": "",
+    # Slice 13. Not a credential either — a Fernet key generated for this file,
+    # which encrypts nothing outside it. Production refuses to boot without one
+    # because a shop's own passkey would otherwise have nowhere safe to live.
+    "MPESA_CREDENTIAL_KEYS": "2026t:0iyRDgKPPXGKa_LVJoaVEjHIH34ozzcE0IN7oIhQAAg=",
 }
 
 

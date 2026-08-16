@@ -14,6 +14,44 @@ def api_client():
     return APIClient()
 
 
+#: A Fernet key generated once, here, for the test suite only. Not a secret and
+#: not reachable from any deployment: `config/settings/base.py` leaves
+#: `MPESA_CREDENTIAL_KEYS` empty and `prod.py` refuses to boot without a real
+#: one, so the only way this value is ever used is by running the tests.
+#: Committed rather than generated per run so that a failure is reproducible
+#: from the same ciphertext.
+TEST_CREDENTIAL_KEY = "2026t:0iyRDgKPPXGKa_LVJoaVEjHIH34ozzcE0IN7oIhQAAg="
+
+
+@pytest.fixture(autouse=True)
+def mpesa_environment(settings):
+    """The deployment-level M-Pesa configuration every test runs against.
+
+    Two things, and both exist because slice 13 made "which account" a question
+    with more than one answer:
+
+    - **A platform shortcode.** `Shop.CollectsVia.PLATFORM` reads
+      `settings.MPESA`, and `payments/tills.py` refuses to push when it is
+      blank — correctly, since a deployment with no platform till cannot
+      collect for a shop that has not connected its own. `base.py` defaults
+      these to `""` so local work needs no M-Pesa account, which would leave
+      every push in the suite refused.
+    - **A credential key**, so `core/secrets.seal` works and a test can create
+      a shop with its own till.
+
+    Placeholders throughout. CLAUDE.md §5: nothing real, sandbox included.
+    """
+    settings.MPESA = {
+        **settings.MPESA,
+        "CONSUMER_KEY": "platform-placeholder",
+        "CONSUMER_SECRET": "platform-placeholder",
+        "SHORTCODE": "4000000",
+        "PASSKEY": "platform-placeholder",
+        "CALLBACK_URL": "https://example.test/api/mpesa/tok/",
+    }
+    settings.MPESA_CREDENTIAL_KEYS = [TEST_CREDENTIAL_KEY]
+
+
 @pytest.fixture
 def make_user(db):
     counter = iter(range(100, 999))
@@ -65,6 +103,7 @@ def _build_shop(org, slug, name):
     from datetime import time
 
     from shops.models import (
+        CollectsVia,
         DepositMode,
         OpeningHours,
         Service,
@@ -74,7 +113,23 @@ def _build_shop(org, slug, name):
         WorkingHours,
     )
 
-    shop = Shop.objects.create(organization=org.organization, name=name, slug=slug, area="Wood Ave")
+    shop = Shop.objects.create(
+        organization=org.organization,
+        name=name,
+        slug=slug,
+        area="Wood Ave",
+        # The deployment's own till, which is what every shop collected into
+        # before slice 13 and what `shops/migrations/0004` moved them all to.
+        # These fixtures predate that slice and their tests are about push
+        # mechanics rather than routing, so `settings.MPESA` stays the thing
+        # that governs them and nothing about their behaviour changed.
+        #
+        # A shop on its own credentials is `shops/tests/test_own_till.py` and
+        # `payments/tests/test_per_shop_till.py`, which build one deliberately —
+        # including the case that matters most, a brand-new shop defaulting to
+        # OWN with nothing filled in and therefore unable to take a deposit.
+        collects_via=CollectsVia.PLATFORM,
+    )
     for weekday in range(0, 6):  # Monday-Saturday
         OpeningHours.objects.create(
             shop=shop, weekday=weekday, opens_at=time(8, 0), closes_at=time(20, 0)

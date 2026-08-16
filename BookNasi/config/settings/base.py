@@ -2,6 +2,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from config.env import database_config, env, env_list
+from core import mpesa
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
@@ -262,8 +263,12 @@ CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", default=(PUBLIC_BASE_URL
 #: The two STK transaction types Daraja offers, and the only two that exist.
 #: Named rather than free text because the string goes straight into the push
 #: body, and a typo there is a rejection at Safaricom with a code nobody reads.
-MPESA_PAYBILL = "CustomerPayBillOnline"
-MPESA_TILL = "CustomerBuyGoodsOnline"
+#: Defined in `core/mpesa.py` since slice 13, which is the one place all three
+#: consumers can reach — settings loads before the app registry, `shops.Shop`
+#: needs them for a field's choices, and `payments/daraja.py` stays importable
+#: without Django settings.
+MPESA_PAYBILL = mpesa.PAYBILL
+MPESA_TILL = mpesa.TILL
 
 MPESA = {
     "BASE_URL": env("MPESA_BASE_URL", "https://sandbox.safaricom.co.ke"),
@@ -294,7 +299,23 @@ MPESA_CLIENT = env("MPESA_CLIENT", "payments.daraja.FakeDarajaClient")
 # A secret path segment on the callback URL. Safaricom does not sign callbacks
 # and does not offer mutual TLS, so without this the endpoint that confirms
 # bookings is a public POST anyone can forge. Configured once with the shortcode.
+#
+# Still one token for the whole deployment after slice 13, and deliberately so:
+# `payments/callbacks.py` finds a payment by `CheckoutRequestID`, which is
+# unique across Safaricom and carries no shortcode, so a second shop's till
+# needs no second callback URL. One endpoint, many shortcodes.
 MPESA_CALLBACK_TOKEN = env("MPESA_CALLBACK_TOKEN", "local-callback-token")
+
+# --------------------------------------------------------------- slice 13
+
+#: The keys that encrypt a shop's own M-Pesa passkey and consumer secret, as
+#: `id:key` pairs, **newest first**. The first encrypts; all of them decrypt.
+#: See `core/secrets.py` for the rotation story and for why this exists at all.
+#:
+#: Empty here so local work and the test suite run without ceremony; `prod.py`
+#: requires it, because a production deployment that cannot seal is one that
+#: would otherwise have to store a live till credential in the clear.
+MPESA_CREDENTIAL_KEYS = env_list("MPESA_CREDENTIAL_KEYS")
 
 # Invariant 4 (CLAUDE.md §10): the USSD fallback line, as a constant rather than
 # a string in a view. It ships in `packages/tokens` for the client; this is the
